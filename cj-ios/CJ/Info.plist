@@ -22,6 +22,13 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>CJ habla con el cerebro que corre en tu Mac, dentro de tu red Wi-Fi.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<!-- Announced by cj-mac/cj/beacon.py, so CJ finds the Mac again after its address changes. -->
+		<string>_cjbrain._tcp</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Para escanear el código QR de emparejamiento que muestra el cerebro en tu Mac.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- The brain serves plain HTTP on the home network (cj-mac/run.sh). Only local addresses are exempt. -->

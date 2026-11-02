@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var status = ""
     @State private var statusOK = false
     @State private var checking = false
+    @State private var scanning = false
 
     @State private var question = ""
     @State private var turns: [Turn] = []
@@ -22,6 +23,11 @@ struct ContentView: View {
         NavigationStack {
             Form {
                 Section {
+                    Button {
+                        scanning = true
+                    } label: {
+                        Label("Escanear QR del cerebro", systemImage: "qrcode.viewfinder")
+                    }
                     TextField("192.168.1.20:8765", text: $url)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
@@ -46,7 +52,7 @@ struct ContentView: View {
                 } header: {
                     Text("Cerebro")
                 } footer: {
-                    Text("La dirección es la línea «Brain» de run.sh; el token, lo que va tras «token=» en la línea «Console».")
+                    Text("Escanea el QR que imprime run.sh, o escribe la línea «Brain» y el token que va tras «token=» en la línea «Console». Si el Mac cambia de dirección, CJ lo vuelve a encontrar solo.")
                 }
 
                 Section("Conversación") {
@@ -79,6 +85,18 @@ struct ContentView: View {
             }
             .navigationTitle("CJ")
             .task { if PairingStore.load() != nil { await check() } }
+            .sheet(isPresented: $scanning) {
+                QRScannerView { code in
+                    if let scanned = Pairing(qr: code) {
+                        url = scanned.url
+                        token = scanned.token
+                        Task { await check() }
+                    } else {
+                        status = "Ese QR no es el del cerebro de CJ."
+                        statusOK = false
+                    }
+                }
+            }
         }
     }
 
@@ -86,17 +104,38 @@ struct ContentView: View {
         checking = true
         defer { checking = false }
         PairingStore.save(pairing)
-        let client = BrainClient(pairing: pairing)
         do {
-            let providers = try await client.health()
-            try await client.checkToken()  // /health is open; this proves the token too
-            let active = providers.filter { $0.value && $0.key != "mock" }.keys.sorted()
-            status = "Conectado. IA disponible: " + (active.isEmpty ? "ninguna" : active.joined(separator: ", "))
-            statusOK = true
+            try await connect()
+        } catch BrainError.unreachable {
+            // The Mac may have a new address: look for it on the Wi-Fi and try again with the same token.
+            status = "No responde en \(url). Buscando el cerebro en la red…"
+            statusOK = false
+            guard let found = await Discovery.find(), found != pairing.baseURL?.absoluteString else {
+                status = BrainError.unreachable(url).localizedDescription
+                return
+            }
+            url = found
+            PairingStore.save(pairing)
+            do {
+                try await connect()
+                status += " (dirección nueva: \(found))"
+            } catch {
+                status = error.localizedDescription
+                statusOK = false
+            }
         } catch {
             status = error.localizedDescription
             statusOK = false
         }
+    }
+
+    private func connect() async throws {
+        let client = BrainClient(pairing: pairing)
+        let providers = try await client.health()
+        try await client.checkToken()  // /health is open; this proves the token too
+        let active = providers.filter { $0.value && $0.key != "mock" }.keys.sorted()
+        status = "Conectado. IA disponible: " + (active.isEmpty ? "ninguna" : active.joined(separator: ", "))
+        statusOK = true
     }
 
     private func send() async {
