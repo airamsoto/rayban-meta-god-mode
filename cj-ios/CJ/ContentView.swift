@@ -9,6 +9,9 @@ struct ContentView: View {
     @State private var checking = false
     @State private var scanning = false
 
+    @StateObject private var speaker = Speaker()
+    @AppStorage("speak_answers") private var speakAnswers = true
+
     @State private var question = ""
     @State private var turns: [Turn] = []
     @State private var asking = false
@@ -53,6 +56,23 @@ struct ContentView: View {
                     Text("Cerebro")
                 } footer: {
                     Text("Escanea el QR que imprime run.sh, o escribe la línea «Brain» y el token que va tras «token=» en la línea «Console». Si el Mac cambia de dirección, CJ lo vuelve a encontrar solo.")
+                }
+
+                Section {
+                    Toggle("Leer las respuestas en voz alta", isOn: $speakAnswers)
+                        .onChange(of: speakAnswers) { _, on in if !on { speaker.stop() } }
+                    Label(speaker.route, systemImage: speaker.onGlasses ? "eyeglasses" : "speaker.wave.2")
+                        .foregroundStyle(speaker.onGlasses ? .green : .secondary)
+                        .font(.callout)
+                    Button {
+                        speaker.say("Hola, soy CJ. Si me oyes en las gafas, el sonido funciona.", language: "es")
+                    } label: {
+                        Label(speaker.speaking ? "Hablando…" : "Probar sonido", systemImage: "play.circle")
+                    }
+                } header: {
+                    Text("Voz")
+                } footer: {
+                    Text("Con las gafas conectadas al iPhone por Bluetooth, CJ suena en ellas. La línea de arriba indica por dónde sale el sonido ahora.")
                 }
 
                 Section("Conversación") {
@@ -149,6 +169,7 @@ struct ContentView: View {
         do {
             let answer = try await BrainClient(pairing: pairing).ask(text, history: history)
             turns.append(Turn(role: "assistant", text: answer.spoken))
+            if speakAnswers { speaker.say(answer.spoken, language: answer.language) }
         } catch {
             turns.append(Turn(role: "assistant", text: "⚠️ " + (error.localizedDescription)))
         }
