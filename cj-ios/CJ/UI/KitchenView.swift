@@ -14,11 +14,11 @@ struct KitchenView: View {
     var body: some View {
         VStack(spacing: 16) {
                 HStack {
-                    Label("Cocina", systemImage: "fork.knife")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(Theme.accent)
+                    BackButton(title: "Salir") { dismiss() }
                     Spacer()
-                    RoundButton(icon: "xmark", size: 40) { dismiss() }
+                    Label("Cocina", systemImage: "fork.knife")
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                        .foregroundStyle(Theme.accent)
                 }
                 ScrollView {
                     VStack(spacing: 16) {

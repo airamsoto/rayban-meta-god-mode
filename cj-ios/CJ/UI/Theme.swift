@@ -180,6 +180,27 @@ struct SuggestionCard: View {
     }
 }
 
+/// "‹ Volver": an obvious way back to the main screen.
+struct BackButton: View {
+    var title = "Volver"
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.left").font(.subheadline.weight(.bold))
+                Text(title).font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(Theme.card, in: Capsule())
+            .overlay(Capsule().stroke(Theme.stroke))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 /// A round secondary control (keyboard, camera, kitchen, settings).
 struct RoundButton: View {
     let icon: String

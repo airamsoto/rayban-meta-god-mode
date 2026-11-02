@@ -31,7 +31,7 @@ struct SettingsView: View {
             .background(Backdrop())
             .navigationTitle("Ajustes")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Listo") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .topBarLeading) { BackButton { dismiss() } } }
             .sheet(isPresented: $scanning) {
                 QRScannerView { code in
                     if let scanned = Pairing(qr: code) { Task { await model.pair(with: scanned) } }
@@ -140,9 +140,23 @@ struct SettingsView: View {
     }
 
     private var about: some View {
-        Section {
-            Button(role: .destructive) { model.clearConversation() } label: { Label("Borrar conversación", systemImage: "trash") }
-            LabeledContent("Versión", value: version)
+        Group {
+            Section {
+                Button(role: .destructive) { model.clearConversation() } label: { Label("Borrar conversación", systemImage: "trash") }
+                LabeledContent("Versión", value: version)
+            }
+            Section {
+                Button { dismiss() } label: {
+                    Label("Volver a CJ", systemImage: "chevron.left")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+            }
         }
     }
 
