@@ -41,6 +41,28 @@ final class PhoneActions: ObservableObject {
         }
     }
 
+    // MARK: - morning briefing
+
+    static let briefingID = "cj-morning-briefing"
+
+    /// A notification every morning at [hour]:[minute]; tapping it opens CJ and plays the day's briefing.
+    func scheduleBriefing(hour: Int, minute: Int) async {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [Self.briefingID])
+        guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Buenos días ☀️"
+        content.body = "Toca para escuchar tu día: agenda, tiempo y noticias."
+        content.sound = .default
+        content.userInfo = ["cj": "briefing"]
+        let trigger = UNCalendarNotificationTrigger(dateMatching: DateComponents(hour: hour, minute: minute), repeats: true)
+        try? await center.add(UNNotificationRequest(identifier: Self.briefingID, content: content, trigger: trigger))
+    }
+
+    func cancelBriefing() {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.briefingID])
+    }
+
     /// "Call this number": the brain already asked and heard yes. iOS shows its own call confirmation too.
     func call(_ number: String) {
         let digits = number.filter { $0.isNumber || $0 == "+" }
@@ -56,5 +78,12 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async
         -> UNNotificationPresentationOptions {
         [.banner, .sound]
+    }
+
+    /// Tapping the morning briefing opens CJ and plays it.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        if response.notification.request.content.userInfo["cj"] as? String == "briefing" {
+            await MainActor.run { IntentRouter.shared.briefingRequested = true }
+        }
     }
 }

@@ -6,6 +6,8 @@ struct SettingsView: View {
     @ObservedObject var glasses: Glasses
     @ObservedObject var tools: PhoneTools
     @ObservedObject private var speakerState: Speaker
+    @ObservedObject private var locationState: Location
+    @ObservedObject private var healthState: HealthTools
     @Environment(\.dismiss) private var dismiss
     @State private var scanning = false
 
@@ -14,6 +16,8 @@ struct SettingsView: View {
         self.glasses = glasses
         self.tools = tools
         speakerState = model.speaker
+        locationState = model.location
+        healthState = tools.health
     }
 
     var body: some View {
@@ -22,6 +26,8 @@ struct SettingsView: View {
                 brain
                 GlassesSection(glasses: glasses)
                 permissions
+                briefing
+                health
                 home
                 voice
                 features
@@ -75,10 +81,11 @@ struct SettingsView: View {
             permissionRow("Calendario", icon: "calendar", allowed: tools.calendarAllowed) { await tools.requestCalendar() }
             permissionRow("Recordatorios y compra", icon: "checklist", allowed: tools.remindersAllowed) { await tools.requestReminders() }
             permissionRow("Contactos", icon: "person.crop.circle", allowed: tools.contactsAllowed) { await tools.requestContacts() }
+            permissionRow("Ubicación", icon: "location", allowed: locationState.allowed) { model.location.request() }
         } header: {
             Text("Permisos del iPhone")
         } footer: {
-            Text("Para tu agenda (también Outlook/Teams si la cuenta está en el iPhone), la lista de la compra, WhatsApp y llamadas por nombre. Si ya los denegaste, actívalos en Ajustes → CJ.")
+            Text("Para tu agenda (también Outlook/Teams si la cuenta está en el iPhone), la lista de la compra, WhatsApp y llamadas por nombre, y la ubicación para «¿cuánto tardo a casa?» o el tiempo aquí. Si ya los denegaste, actívalos en Ajustes → CJ.")
         }
     }
 
@@ -91,6 +98,37 @@ struct SettingsView: View {
             } else {
                 Button("Permitir") { Task { await request() } }.buttonStyle(.borderedProminent).tint(Theme.violet)
             }
+        }
+    }
+
+    private var briefing: some View {
+        Section {
+            Toggle(isOn: $model.briefingOn) { Label("Resumen de la mañana", systemImage: "sun.max") }
+            if model.briefingOn {
+                DatePicker("Hora", selection: $model.briefingTime, displayedComponents: .hourAndMinute)
+            }
+            Button { Task { await model.briefing() }; dismiss() } label: { Label("Escucharlo ahora", systemImage: "play.circle") }
+        } header: {
+            Text("Cada día")
+        } footer: {
+            Text("Una notificación cada mañana: tócala y CJ te cuenta tu agenda, el tiempo, cómo has dormido y los titulares. También: «Oye Siri, buenos días CJ».")
+        }
+    }
+
+    private var health: some View {
+        Section {
+            if healthState.built {
+                permissionRow("Apple Salud", icon: "heart.fill", allowed: healthState.allowed) { await healthState.requestAccess() }
+            } else {
+                Label("Apple Salud: instala la versión «Salud» de CJ", systemImage: "heart")
+                    .foregroundStyle(.secondary)
+            }
+            Label("Garmin: en el Mac, ./set-key.sh garmin", systemImage: "applewatch")
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Salud y deporte")
+        } footer: {
+            Text("Apple Salud reúne lo que sincronizan tu iPhone y relojes como Garmin, Oura o Whoop (pasos, sueño, pulso, entrenamientos). Garmin directo añade Body Battery y estrés; usa una conexión no oficial, se configura una vez en el Mac y no guarda tu contraseña.")
         }
     }
 

@@ -28,7 +28,7 @@ import re
 import websockets
 from fastapi import WebSocket, WebSocketDisconnect
 
-from . import prefs, mac, recall, notes, nudges, phone_agent, lookups
+from . import prefs, mac, recall, notes, nudges, phone_agent, lookups, region, garmin
 from .events import bus
 from .modes.common import persona
 
@@ -131,6 +131,14 @@ PHONE_ACTIONS = {
     "list_items": '{"list": e.g. "Compra"}: read the open items of a reminders list (the shopping list)',
     "run_shortcut": '{"name": exact name of one of the user\'s Shortcuts}: run an Apple Shortcut, e.g. home scenes '
                     "and lights (Apple Home), music, or anything the user built",
+    "share": '{"network": instagram, instagram_story, x, threads, bluesky, facebook, linkedin, tiktok, telegram, '
+             'whatsapp or any, "text": the caption or post, "photo": true to attach the latest glasses photo}: '
+             "prepare a post; the app opens with it ready and the user taps to publish",
+    "music": '{"query": song, artist, album or playlist, "app": "apple_music" or "spotify"}: play music '
+             "(from the user's Apple Music library when it's there, otherwise opens a search)",
+    "directions": '{"destination", "mode": "driving", "walking" or "transit"}: start navigation in Maps',
+    "health": '{"what": "summary", "steps", "sleep", "heart", "workouts", "days_ago": 0 today}: Apple Health data '
+              "(steps, sleep, heart rate, HRV, workouts from the iPhone and any watch that syncs there, e.g. Garmin)",
 }
 
 PHONE_PROMPT = """
@@ -139,7 +147,14 @@ shopping list, and Apple Shortcuts (which run their smart home). Prefer it over 
 and calls: their calendar lives on the phone. Messages are typed into the chat and the user taps send, so read the
 message back in one short sentence and say it's ready to send; don't claim it was sent. Smart home goes through
 run_shortcut with the user's shortcut names{shortcuts}. In the kitchen, guide recipes one step at a time and use
-timers freely."""
+timers freely. To post what the user sees, call look first, then share with photo true; write the caption in the
+user's language and read it back. Social posts are never published by you: the app opens ready and the user taps."""
+
+
+GARMIN = _fn("garmin", "The user's Garmin watch data: sleep, steps, Body Battery, stress, heart rate, activities.",
+             what={"type": "STRING", "enum": ["today", "sleep", "last_activity", "activities", "week"]},
+             days_ago={"type": "INTEGER", "description": "0 today, 1 yesterday…"})
+OPTIONAL.add("days_ago")
 
 
 def phone_function(actions: list[str]) -> dict:
@@ -176,8 +191,8 @@ class Bridge:
             tools_ = [{"functionDeclarations": [f for f in FUNCTIONS if f["name"] == "end_conversation"]}]
         else:
             history = "".join(f"\n{t.get('role')}: {t.get('text', '')[:300]}" for t in self.start.get("history", [])[-8:])
-            system = persona() + LIVE + recall.prompt() + (f"\nConversation so far:{history}" if history else "")
-            functions = list(FUNCTIONS)
+            system = persona() + LIVE.replace("about 95 rupees", region.current().money_example) + recall.prompt() + (f"\nConversation so far:{history}" if history else "")
+            functions = list(FUNCTIONS) + ([GARMIN] if garmin.available() else [])
             if self.phone_tools:
                 shortcuts = [str(s)[:60] for s in self.start.get("shortcuts", []) if str(s).strip()][:30]
                 system += PHONE_PROMPT.format(shortcuts=f" ({', '.join(shortcuts)})" if shortcuts else "")
@@ -354,7 +369,8 @@ class Bridge:
     async def _run(self, name: str, a: dict) -> str:
         if name in lookups.LOOKUPS:
             if name == "exchange_rate":
-                a = {"from": a.get("from_currency", "USD"), "to": a.get("to_currency", "INR"), "amount": a.get("amount", 1)}
+                a = {"from": a.get("from_currency", "USD"), "to": a.get("to_currency", region.current().currency),
+                     "amount": a.get("amount", 1)}
             return await lookups.run(name, a)
         if name == "travel_time":
             return await lookups.travel_time(str(a.get("destination", "")), str(a.get("mode") or "driving"))
@@ -393,6 +409,8 @@ class Bridge:
             return await self._look(str(a.get("question", "")))
         if name == "device_action":
             return await self._device(str(a.get("action", "")), a.get("args_json") or "{}")
+        if name == "garmin":
+            return await garmin.lookup(str(a.get("what") or "today"), int(float(a.get("days_ago") or 0)))
         if name == "phone":
             return await self._phone_tool(str(a.get("action", "")), a.get("args_json") or "{}")
         if name == "confirm_action":

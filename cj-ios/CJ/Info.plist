@@ -83,6 +83,14 @@
 	<string>Para tus recordatorios y la lista de la compra.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>Para tus recordatorios y la lista de la compra.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Para poner tu música de Apple Music cuando se la pides a CJ.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Para saber cuánto tardas en llegar a un sitio, el tiempo donde estás y lo que hay cerca.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Para responderte cómo has dormido, tus pasos, tu pulso y tus entrenamientos.</string>
+	<key>CJHealthKit</key>
+	<string>$(CJ_HEALTHKIT)</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Para llamar o escribir por WhatsApp y Teams a tus contactos por su nombre.</string>
 	<key>LSApplicationQueriesSchemes</key>
@@ -90,6 +98,9 @@
 		<string>whatsapp</string>
 		<string>msteams</string>
 		<string>shortcuts</string>
+		<string>spotify</string>
+		<string>tg</string>
+		<string>music</string>
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Para oír tus preguntas a través del micrófono de las gafas o del iPhone.</string>

@@ -25,7 +25,13 @@ struct HomeView: View {
             KitchenView(model: model, live: live, timers: timers, tools: model.tools)
         }
         .task { await model.start() }
-        .onAppear { if router.talkRequested { router.talkRequested = false; Task { await model.talkFromIntent() } } }
+        .onAppear {
+            if router.talkRequested { router.talkRequested = false; Task { await model.talkFromIntent() } }
+            if router.briefingRequested { router.briefingRequested = false; Task { await model.briefing() } }
+        }
+        .onChange(of: router.briefingRequested) { _, requested in
+            if requested { router.briefingRequested = false; Task { await model.briefing() } }
+        }
         .onChange(of: router.talkRequested) { _, requested in
             if requested { router.talkRequested = false; Task { await model.talkFromIntent() } }
         }
@@ -123,11 +129,17 @@ struct HomeView: View {
                 SuggestionCard(icon: "eye.fill", title: "¿Qué estoy viendo?", subtitle: "Mira por las gafas") {
                     model.ask("¿Qué estoy viendo?")
                 }
+                SuggestionCard(icon: "square.and.arrow.up.fill", title: "Publica lo que veo", subtitle: "Instagram, X, Threads…") {
+                    model.ask("Haz una foto con las gafas y prepárala para publicarla en Instagram con un buen texto")
+                }
+                SuggestionCard(icon: "moon.zzz.fill", title: "¿Cómo he dormido?", subtitle: "Garmin o Apple Salud") {
+                    model.ask("¿Cómo he dormido esta noche y cómo voy de energía hoy?")
+                }
+                SuggestionCard(icon: "music.note", title: "Música", subtitle: "«Pon algo de Quevedo»") {
+                    model.toggleTalk()
+                }
                 SuggestionCard(icon: "cart.fill", title: "Lista de la compra", subtitle: "Qué falta en casa") {
                     model.ask("¿Qué hay en mi lista de la compra?")
-                }
-                SuggestionCard(icon: "message.fill", title: "WhatsApp", subtitle: "«Dile a mamá que llego tarde»") {
-                    model.toggleTalk()
                 }
                 SuggestionCard(icon: "house.fill", title: "Casa", subtitle: model.shortcuts.first.map { "«\($0)»" } ?? "Tus Atajos de Apple") {
                     if let first = model.shortcuts.first { model.ask("Ejecuta el atajo \(first)") } else { model.showSettings = true }

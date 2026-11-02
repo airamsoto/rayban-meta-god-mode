@@ -37,3 +37,4 @@ cj-ios/build/
 cj-ios/Payload/
 *.ipa
 cj-ios/build-sim/
+cj-ios/build-salud/

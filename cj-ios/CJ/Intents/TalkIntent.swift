@@ -23,6 +23,10 @@ struct CJShortcuts: AppShortcutsProvider {
                               "Talk to \(.applicationName)"],
                     shortTitle: "Hablar con CJ",
                     systemImageName: "eyeglasses")
+        AppShortcut(intent: BriefingIntent(),
+                    phrases: ["Resumen del día con \(.applicationName)", "Buenos días \(.applicationName)"],
+                    shortTitle: "Resumen del día",
+                    systemImageName: "sun.max")
     }
 }
 
@@ -31,4 +35,18 @@ struct CJShortcuts: AppShortcutsProvider {
 final class IntentRouter: ObservableObject {
     static let shared = IntentRouter()
     @Published var talkRequested = false
+    @Published var briefingRequested = false
+}
+
+/// "Oye Siri, resumen del día con CJ": the morning briefing on demand.
+struct BriefingIntent: AppIntent {
+    static var title: LocalizedStringResource = "Resumen del día"
+    static var description = IntentDescription("Abre CJ y te cuenta tu agenda, el tiempo y las noticias.")
+    static var openAppWhenRun = true
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        IntentRouter.shared.briefingRequested = true
+        return .result()
+    }
 }

@@ -1,6 +1,7 @@
 import Contacts
 import EventKit
 import Foundation
+import MediaPlayer
 import UIKit
 
 /// The things the brain can ask the iPhone to do itself during a live conversation (cj-mac/cj/live.py PHONE_ACTIONS):
@@ -9,7 +10,7 @@ import UIKit
 @MainActor
 final class PhoneTools: ObservableObject {
     static let actions = ["calendar_events", "calendar_add", "teams_join", "teams_message", "whatsapp", "call",
-                          "reminder_add", "list_items", "run_shortcut"]
+                          "reminder_add", "list_items", "run_shortcut", "share", "music", "directions"]
     static let shoppingList = "Compra"
 
     @Published private(set) var calendarAllowed = false
@@ -18,6 +19,10 @@ final class PhoneTools: ObservableObject {
 
     /// Called with a number to dial once the conversation ends (a call needs the audio).
     var callRequested: ((String, String) -> Void)?
+    /// The latest photo from the glasses, for posting what the user sees.
+    var latestPhoto: (() -> UIImage?)?
+    /// Apple Health, when this build has the HealthKit entitlement.
+    let health = HealthTools()
 
     private let events = EKEventStore()
     private let contacts = CNContactStore()
@@ -49,6 +54,11 @@ final class PhoneTools: ObservableObject {
         case "reminder_add": return await reminderAdd(s("text"), list: s("list"))
         case "list_items": return await listItems(s("list").isEmpty ? Self.shoppingList : s("list"))
         case "run_shortcut": return runShortcut(s("name"))
+        case "share": return share(network: s("network").lowercased(), text: s("text"),
+                                   photo: (args["photo"] as? Bool) ?? (s("photo") == "true"))
+        case "music": return await music(s("query"), app: s("app"))
+        case "directions": return directions(to: s("destination"), mode: s("mode"))
+        case "health": return await health.run(s("what").isEmpty ? "summary" : s("what"), daysAgo: n("days_ago") ?? 0)
         default: return "FAILED: unknown phone action \(action)."
         }
     }
@@ -240,6 +250,101 @@ final class PhoneTools: ObservableObject {
         var url = URLComponents(string: "shortcuts://run-shortcut")!
         url.queryItems = [URLQueryItem(name: "name", value: name)]
         return open(url.url!, "Running the shortcut \(name).")
+    }
+
+    // MARK: - social networks
+
+    /// Posts are prepared, never published: text-only posts open the network's composer with the text typed; anything
+    /// with a photo (or a network without a composer link) opens the share sheet with the photo, and the caption is
+    /// copied so it can be pasted (Instagram ignores captions passed in).
+    func share(network: String, text: String, photo: Bool) -> String {
+        let image = photo ? latestPhoto?() : nil
+        if photo && image == nil { return "FAILED: there's no glasses photo yet; call look first." }
+        let encoded = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        if image == nil {
+            let composer: String? = switch network {
+            case "x", "twitter": "https://x.com/intent/post?text=\(encoded)"
+            case "threads": "https://www.threads.net/intent/post?text=\(encoded)"
+            case "bluesky": "https://bsky.app/intent/compose?text=\(encoded)"
+            case "telegram": "tg://msg?text=\(encoded)"
+            case "whatsapp": "whatsapp://send?text=\(encoded)"
+            default: nil
+            }
+            if let composer, let url = URL(string: composer) {
+                return open(url, "The \(network) composer is open with the post typed; the user taps to publish.")
+            }
+        }
+        guard UIApplication.shared.applicationState == .active else {
+            return "FAILED: the iPhone is locked or CJ isn't on screen; ask the user to unlock it and open CJ."
+        }
+        if !text.isEmpty { UIPasteboard.general.string = text }
+        var items: [Any] = []
+        if let image { items.append(image) }
+        if !text.isEmpty { items.append(text) }
+        guard !items.isEmpty else { return "FAILED: nothing to share." }
+        let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        guard let top = Self.topController() else { return "FAILED: couldn't open the share sheet." }
+        sheet.popoverPresentationController?.sourceView = top.view
+        top.present(sheet, animated: true)
+        let target = network.isEmpty || network == "any" ? "the app they choose" : network
+        return "The share sheet is open\(image != nil ? " with the photo" : ""); the user picks \(target) and publishes."
+            + (text.isEmpty ? "" : " The caption is copied, to paste if the app doesn't take it.")
+    }
+
+    private static func topController() -> UIViewController? {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+        var top = scene?.keyWindow?.rootViewController
+        while let next = top?.presentedViewController { top = next }
+        return top
+    }
+
+    // MARK: - music and maps
+
+    /// Plays from the Apple Music library when something matches; otherwise opens a search in the music app.
+    func music(_ query: String, app: String) async -> String {
+        guard !query.isEmpty else { return "FAILED: what should I play?" }
+        if app != "spotify", await libraryAllowed() {
+            let found = Self.libraryMatches(query)
+            if !found.isEmpty {
+                let player = MPMusicPlayerController.systemMusicPlayer
+                player.setQueue(with: MPMediaItemCollection(items: found))
+                player.play()
+                return "Playing \(found.first?.title ?? query) from the user's library."
+            }
+        }
+        let term = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        let link = app == "spotify" ? "spotify:search:\(term)" : "music://music.apple.com/search?term=\(term)"
+        guard let url = URL(string: link) else { return "FAILED: bad search." }
+        return open(url, "Opened a search for \(query) in \(app == "spotify" ? "Spotify" : "Apple Music"); the user taps play.")
+    }
+
+    private func libraryAllowed() async -> Bool {
+        if MPMediaLibrary.authorizationStatus() == .notDetermined {
+            _ = await withCheckedContinuation { c in MPMediaLibrary.requestAuthorization { c.resume(returning: $0) } }
+        }
+        return MPMediaLibrary.authorizationStatus() == .authorized
+    }
+
+    private static func libraryMatches(_ query: String) -> [MPMediaItem] {
+        for property in [MPMediaItemPropertyArtist, MPMediaItemPropertyTitle, MPMediaItemPropertyAlbumTitle,
+                         MPMediaItemPropertyGenre] {
+            let q = MPMediaQuery.songs()
+            q.addFilterPredicate(MPMediaPropertyPredicate(value: query, forProperty: property, comparisonType: .contains))
+            if let items = q.items, !items.isEmpty { return Array(items.shuffled().prefix(50)) }
+        }
+        if let lists = MPMediaQuery.playlists().collections?.filter({
+            ($0.value(forProperty: MPMediaPlaylistPropertyName) as? String)?.localizedCaseInsensitiveContains(query) == true
+        }), let first = lists.first { return first.items }
+        return []
+    }
+
+    func directions(to destination: String, mode: String) -> String {
+        guard !destination.isEmpty else { return "FAILED: where to?" }
+        let flag = mode == "walking" ? "w" : mode == "transit" ? "r" : "d"
+        var url = URLComponents(string: "https://maps.apple.com/")!
+        url.queryItems = [URLQueryItem(name: "daddr", value: destination), URLQueryItem(name: "dirflg", value: flag)]
+        return open(url.url!, "Maps is showing the route to \(destination).")
     }
 
     // MARK: -

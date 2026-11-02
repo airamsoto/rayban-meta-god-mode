@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from . import scout
+from . import scout, region
 
 TIMEOUT = 10
 # Wikipedia refuses (403) a User-Agent without a link in it; this one works and carries no personal details.
@@ -108,7 +108,7 @@ async def weather(place: str) -> str:
 
 async def news(topic: str = "") -> str:
     base = "https://news.google.com/rss"
-    params = {"hl": "en-IN", "gl": "IN", "ceid": "IN:en"}
+    params = dict(region.current().news)
     url = f"{base}/search" if topic.strip() else base
     if topic.strip():
         params["q"] = topic.strip()
@@ -124,17 +124,22 @@ async def wiki(query: str) -> str:
     query = query.strip()
     if not query:
         raise ToolError("nothing to look up")
-    hits = (await _get("https://en.wikipedia.org/w/api.php", action="opensearch", search=query, limit=1,
+    host = f"https://{region.current().wikipedia}.wikipedia.org"
+    hits = (await _get(f"{host}/w/api.php", action="opensearch", search=query, limit=1,
                        namespace=0, format="json")).json()
+    if not hits[1] and host != "https://en.wikipedia.org":  # nothing in the local language: try English
+        host = "https://en.wikipedia.org"
+        hits = (await _get(f"{host}/w/api.php", action="opensearch", search=query, limit=1,
+                           namespace=0, format="json")).json()
     if not hits[1]:
         raise ToolError(f"Wikipedia has nothing on {query}")
     title = hits[1][0]
-    page = (await _get("https://en.wikipedia.org/api/rest_v1/page/summary/" + urllib.parse.quote(title.replace(" ", "_")))).json()
+    page = (await _get(f"{host}/api/rest_v1/page/summary/" + urllib.parse.quote(title.replace(" ", "_")))).json()
     return f"Wikipedia, {page.get('title', title)}: {page.get('extract', '')[:1200]}"
 
 
 async def exchange_rate(base: str, quote: str, amount: float = 1) -> str:
-    base, quote = (base or "USD").upper()[:3], (quote or "INR").upper()[:3]
+    base, quote = (base or "USD").upper()[:3], (quote or region.current().currency).upper()[:3]
     data = (await _get("https://api.frankfurter.app/latest", amount=amount, **{"from": base, "to": quote})).json()
     rate = data.get("rates", {}).get(quote)
     if rate is None:
@@ -182,7 +187,8 @@ async def _run(name: str, args: dict) -> str:
         if name == "wiki":
             return await wiki(str(args.get("query", "")))
         if name == "exchange_rate":
-            return await exchange_rate(str(args.get("from", "USD")), str(args.get("to", "INR")), float(args.get("amount", 1) or 1))
+            return await exchange_rate(str(args.get("from", "USD")), str(args.get("to", region.current().currency)),
+                                       float(args.get("amount", 1) or 1))
         if name == "briefing":
             return await briefing(str(args.get("place", "")))
         if name == "web":

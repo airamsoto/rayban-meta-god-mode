@@ -219,3 +219,48 @@ def test_typed_text_becomes_a_user_turn(bridge):
     run(bridge.from_phone())
     turn = bridge.gemini.sent[-1]["clientContent"]
     assert turn["turns"][0]["parts"][0]["text"] == "¿Qué tengo hoy?" and turn["turnComplete"] is True
+
+
+# ---- Garmin --------------------------------------------------------------------------------------------------------
+
+def test_garmin_tool_only_when_set_up(bridge, monkeypatch):
+    from cj import garmin
+    bridge.start = {"history": []}
+    monkeypatch.setattr(garmin, "available", lambda: False)
+    assert "garmin" not in [f["name"] for f in bridge._setup()["setup"]["tools"][0]["functionDeclarations"]]
+    monkeypatch.setattr(garmin, "available", lambda: True)
+    assert "garmin" in [f["name"] for f in bridge._setup()["setup"]["tools"][0]["functionDeclarations"]]
+
+
+def test_garmin_answers_and_explains_failures(bridge, monkeypatch):
+    from cj import garmin
+
+    class FakeClient:
+        def get_user_summary(self, day):
+            return {"totalSteps": 8421, "dailyStepGoal": 10000, "bodyBatteryMostRecentValue": 62,
+                    "bodyBatteryHighestValue": 88, "bodyBatteryLowestValue": 20, "averageStressLevel": 31,
+                    "restingHeartRate": 54}
+
+        def get_sleep_data(self, day):
+            return {"dailySleepDTO": {"sleepTimeSeconds": 26100, "deepSleepSeconds": 5400,
+                                      "sleepScores": {"overall": {"value": 81}}}, "avgOvernightHrv": 48}
+
+        def get_hrv_data(self, day):
+            return None
+
+        def get_activities(self, start, limit):
+            return [{"activityName": "Carrera", "activityType": {"typeKey": "running"}, "distance": 8040.0,
+                     "duration": 2580, "averageHR": 151, "startTimeLocal": "2026-11-01 08:10:00"}]
+
+    monkeypatch.setattr(garmin, "available", lambda: True)
+    monkeypatch.setattr(garmin, "_connect", lambda: FakeClient())
+    today = run(bridge._run("garmin", {"what": "today"}))
+    assert "steps 8421" in today and "Body Battery now 62" in today and "sleep score 81/100" in today
+    assert "HRV 48" in today
+    last = run(bridge._run("garmin", {"what": "last_activity"}))
+    assert "8.04 km" in last and "average heart rate 151" in last
+
+    def broken():
+        raise garmin.GarminError("I can't sign in to Garmin right now.")
+    monkeypatch.setattr(garmin, "_connect", broken)
+    assert run(bridge._run("garmin", {"what": "sleep"})).startswith("FAILED: I can't sign in")

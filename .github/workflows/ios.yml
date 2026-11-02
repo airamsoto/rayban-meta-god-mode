@@ -45,8 +45,23 @@ jobs:
           zip -qry CJ-unsigned.ipa Payload
           ls -lh CJ-unsigned.ipa
 
+      # Same app with Apple Health: the HealthKit entitlement is signed in ad hoc so Sideloadly asks Apple for it.
+      - name: Build and package the Salud (Apple Health) .ipa
+        run: |
+          xcodebuild -project CJ.xcodeproj -scheme CJ -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build-salud \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" CJ_HEALTHKIT=YES \
+            build
+          rm -rf Payload && mkdir Payload
+          cp -R build-salud/Build/Products/Release-iphoneos/CJ.app Payload/
+          codesign -f -s - --entitlements CJ/CJHealth.entitlements Payload/CJ.app
+          zip -qry CJ-salud.ipa Payload
+          ls -lh CJ-salud.ipa
+
       - uses: actions/upload-artifact@v4
         with:
           name: CJ-ios-unsigned
-          path: cj-ios/CJ-unsigned.ipa
+          path: |
+            cj-ios/CJ-unsigned.ipa
+            cj-ios/CJ-salud.ipa
           retention-days: 14

@@ -1,5 +1,6 @@
-import Foundation
 import Combine
+import Foundation
+import UIKit
 
 /// Everything CJ's screens show and do: the brain connection, the conversation, the glasses, timers and phone tools.
 /// Views observe this plus the live session and glasses directly.
@@ -32,12 +33,27 @@ final class AppModel: ObservableObject {
     @Published var shortcutNames = UserDefaults.standard.string(forKey: "home_shortcuts") ?? "" {
         didSet { UserDefaults.standard.set(shortcutNames, forKey: "home_shortcuts") }
     }
+    /// Morning briefing: a daily notification at this time (minutes after midnight); tapping it plays the day.
+    @Published var briefingOn = UserDefaults.standard.bool(forKey: "briefing_on") {
+        didSet { UserDefaults.standard.set(briefingOn, forKey: "briefing_on"); Task { await scheduleBriefing() } }
+    }
+    @Published var briefingTime = Calendar.current.date(from: DateComponents(
+        hour: (UserDefaults.standard.object(forKey: "briefing_minutes") as? Int ?? 480) / 60,
+        minute: (UserDefaults.standard.object(forKey: "briefing_minutes") as? Int ?? 480) % 60)) ?? .now {
+        didSet {
+            let c = Calendar.current.dateComponents([.hour, .minute], from: briefingTime)
+            UserDefaults.standard.set((c.hour ?? 8) * 60 + (c.minute ?? 0), forKey: "briefing_minutes")
+            Task { await scheduleBriefing() }
+        }
+    }
 
     let glasses: Glasses
     let live = LiveSession()
     let speaker = Speaker()
     let timers = PhoneActions()
     let tools = PhoneTools()
+    let location = Location()
+    private var lastPhoto: UIImage?  // the latest glasses photo, for "post what I'm seeing"
 
     private var lastGlance = Date.distantPast
     private var started = false
@@ -57,6 +73,7 @@ final class AppModel: ObservableObject {
             if self.speakAnswers && !self.live.active { self.speaker.say(text, language: "es") }
         }
         tools.callRequested = { [weak self] number, _ in self?.live.callAfterTurn(number) }
+        tools.latestPhoto = { [weak self] in self?.lastPhoto }
         live.onTurn = { [weak self] you, cj in
             guard let self else { return }
             if !you.isEmpty { self.turns.append(Turn(role: "user", text: you)) }
@@ -64,6 +81,7 @@ final class AppModel: ObservableObject {
         }
         live.takePhoto = { [weak self] in await self?.photo() }
         live.onPhoto = { [weak self] shot in
+            self?.lastPhoto = shot.image
             self?.turns.append(Turn(role: "user", text: "Lo que veían las gafas", image: shot.image))
         }
         live.onPhoneAction = { [weak self] action in self?.apply(action) }
@@ -146,8 +164,10 @@ final class AppModel: ObservableObject {
         guard connected else { notice = "Conecta con el cerebro primero (Ajustes)."; return }
         speaker.stop()
         notice = ""
+        let offered = PhoneTools.actions + (tools.health.available ? ["health"] : [])
+        let here = await location.current()
         let end = await live.run(pairing: pairing, history: turns.filter { $0.image == nil }, firstText: firstText,
-                                 phoneTools: PhoneTools.actions, shortcuts: shortcuts)
+                                 phoneTools: offered, shortcuts: shortcuts, location: here)
         switch end {
         case .failed(let why):
             notice = why
@@ -183,10 +203,39 @@ final class AppModel: ObservableObject {
 
     func clearConversation() { turns.removeAll() }
 
+    // MARK: - morning briefing
+
+    /// The day in one go: calendar, weather where the user is, headlines, and Garmin or Apple Health if set up.
+    func briefing() async {
+        await talkFromIntentReady()
+        ask("Buenos días. Dame mi resumen del día en pocas frases: mi agenda de hoy, el tiempo aquí, "
+            + "cómo he dormido si tienes datos de salud o Garmin, y los titulares más importantes.")
+    }
+
+    private func talkFromIntentReady() async {
+        for _ in 0..<20 where !connected { try? await Task.sleep(nanoseconds: 250_000_000) }
+    }
+
+    func scheduleBriefing() async {
+        if briefingOn {
+            let c = Calendar.current.dateComponents([.hour, .minute], from: briefingTime)
+            await timers.scheduleBriefing(hour: c.hour ?? 8, minute: c.minute ?? 0)
+        } else {
+            timers.cancelBriefing()
+        }
+    }
+
     // MARK: - phone
 
     private func photo() async -> Snapshot? {
-        do { return try await glasses.takePhoto() } catch { notice = error.localizedDescription; return nil }
+        do {
+            let shot = try await glasses.takePhoto()
+            lastPhoto = shot.image
+            return shot
+        } catch {
+            notice = error.localizedDescription
+            return nil
+        }
     }
 
     /// Things the brain hands back: timers, visual memory on/off, calls.

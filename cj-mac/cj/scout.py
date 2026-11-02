@@ -14,8 +14,10 @@ import urllib.parse
 
 import httpx
 
+from . import region
+
 BROWSER = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/537.36 (KHTML, like Gecko) "
-                         "Chrome/130.0 Safari/537.36", "Accept-Language": "en-IN,en;q=0.9"}
+                         "Chrome/130.0 Safari/537.36"}
 SEARCH_TIMEOUT = httpx.Timeout(8.0, connect=4.0)
 PAGE_TIMEOUT = httpx.Timeout(6.0, connect=3.0)
 PAGES = 3          # pages opened per question
@@ -83,14 +85,14 @@ def parse_bing(page: str) -> list[dict]:
 async def search(client: httpx.AsyncClient, query: str) -> list[dict]:
     errors = []
     try:
-        r = await client.post("https://html.duckduckgo.com/html/", data={"q": query, "kl": "in-en"})
+        r = await client.post("https://html.duckduckgo.com/html/", data={"q": query, "kl": region.current().duckduckgo})
         if r.status_code == 200 and (found := parse_duckduckgo(r.text)):
             return found
         errors.append(f"DuckDuckGo answered {r.status_code}")
     except httpx.HTTPError as e:
         errors.append(f"DuckDuckGo: {type(e).__name__}")
     try:
-        r = await client.get("https://www.bing.com/search", params={"q": query, "setlang": "en"})
+        r = await client.get("https://www.bing.com/search", params={"q": query, **region.current().bing})
         if r.status_code == 200 and (found := parse_bing(r.text)):
             return found
         errors.append(f"Bing answered {r.status_code}")
@@ -114,7 +116,8 @@ async def research(query: str) -> str:
     query = query.strip()
     if not query:
         raise ScoutError("nothing to search for")
-    async with httpx.AsyncClient(headers=BROWSER, timeout=SEARCH_TIMEOUT, follow_redirects=True) as client:
+    headers = {**BROWSER, "Accept-Language": region.current().accept_language}
+    async with httpx.AsyncClient(headers=headers, timeout=SEARCH_TIMEOUT, follow_redirects=True) as client:
         results = [r for r in await search(client, query) if not any(s in r["url"] for s in SKIP)][:PAGES + 2]
         if not results:
             raise ScoutError(f"no web results for {query}")

@@ -6,6 +6,7 @@ import os
 import re
 from zoneinfo import ZoneInfo
 
+from .. import region
 from ..llm.provider import Attachment
 from ..llm.chain import router
 
@@ -14,7 +15,7 @@ user's ear, so it must sound natural out loud.
 - Understand any language and answer in the language the user just used: English, Mandarin, Hindi, Spanish,
   French, Arabic, Bengali, Portuguese, Russian, Urdu, Japanese, German and more. Hindi in Devanagari; Hinglish
   (Hindi and English mixed) in Roman letters. Technical words such as API or Wi-Fi may stay in English.
-- Use the user's local formats (in India: rupees, lakh and crore, DD/MM dates).
+- Use the user's local formats ({formats}).
 - Answer first, in one or two short sentences. Put anything longer in "details", which is shown on the phone.
 - Never invent facts. If you don't know or can't see it, say so."""
 
@@ -23,7 +24,8 @@ def persona() -> str:
     """The persona plus the current date and time, so "what time is it in London" works without web access."""
     zone = os.environ.get("CJ_TIMEZONE", "Asia/Kolkata")
     now = datetime.datetime.now(ZoneInfo(zone))
-    return f"{PERSONA}\n- It is now {now:%A %d %B %Y, %H:%M} ({zone}). Work out other time zones from this."
+    return (PERSONA.replace("{formats}", region.current().formats)
+            + f"\n- It is now {now:%A %d %B %Y, %H:%M} ({zone}). Work out other time zones from this.")
 
 
 def extract_json(text: str) -> dict:

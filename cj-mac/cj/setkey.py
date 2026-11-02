@@ -1,8 +1,9 @@
 """Saves an API key to ~/.cj/config.json (mode 600) from a hidden prompt:
-    python -m cj.setkey [gemini|groq|openrouter|ollama|azure_speech|claude|openai|deepseek|alexa]
+    python -m cj.setkey [gemini|groq|openrouter|ollama|azure_speech|claude|openai|deepseek|alexa|garmin]
 azure_speech also asks for the Azure region. claude, openai and deepseek ask whether to make them CJ's main brain
 and for an optional monthly spending limit; openai and openrouter ask which model to use, ollama which local model
-(it needs no key). alexa saves the sign-in token for smart home control."""
+(it needs no key). alexa saves the sign-in token for smart home control. garmin signs in to Garmin Connect once
+and keeps only its session tokens."""
 from __future__ import annotations
 
 import getpass
@@ -18,6 +19,9 @@ def main() -> None:
         return alexa()
     if provider == "ollama":
         return ollama()
+    if provider == "garmin":
+        from . import garmin
+        return garmin.setup()
     value = getpass.getpass(f"Paste your {provider} API key (hidden), then press Enter: ").strip()
     if len(value) < 20 or "YOUR_KEY" in value:
         sys.exit("That doesn't look like a real key (placeholder or too short). Nothing was saved.")

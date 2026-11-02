@@ -61,7 +61,7 @@ final class LiveSession: ObservableObject {
     /// [firstText]: a typed question (or quick action) to send as soon as the session is ready.
     /// [phoneTools], [shortcuts]: what this iPhone can do itself, offered to the model.
     func run(pairing: Pairing, history: [Turn], firstText: String? = nil, phoneTools: [String] = [],
-             shortcuts: [String] = []) async -> LiveEnd {
+             shortcuts: [String] = [], location: [String: Double]? = nil) async -> LiveEnd {
         guard !active else { return .failed("ya hay una conversación en marcha") }
         guard let base = pairing.baseURL,
               let url = URL(string: base.absoluteString.replacingOccurrences(of: "http", with: "ws", options: .anchored) + "/ws/live")
@@ -87,11 +87,12 @@ final class LiveSession: ObservableObject {
         self.socket = socket
         socket.resume()
 
-        let start: [String: Any] = [
+        var start: [String: Any] = [
             "type": "start", "mode": "assistant", "language": "", "user_language": "Spanish",
             "history": history.suffix(8).map { ["role": $0.role, "text": $0.text] },
             "phone_tools": phoneTools, "shortcuts": shortcuts,
         ]
+        if let location { start["location"] = location }
         send(json: start)
 
         let audio = LiveAudio()
