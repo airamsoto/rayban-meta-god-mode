@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-15-intel  # arm64 macOS runners were stuck in the queue (capacity constraints)
     defaults:
       run:
         working-directory: cj-ios
