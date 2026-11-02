@@ -27,6 +27,8 @@
 		<!-- Announced by cj-mac/cj/beacon.py, so CJ finds the Mac again after its address changes. -->
 		<string>_cjbrain._tcp</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Para oír tus preguntas a través del micrófono de las gafas o del iPhone.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Para escanear el código QR de emparejamiento que muestra el cerebro en tu Mac.</string>
 	<key>NSAppTransportSecurity</key>

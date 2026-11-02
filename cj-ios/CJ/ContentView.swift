@@ -11,6 +11,9 @@ struct ContentView: View {
 
     @StateObject private var speaker = Speaker()
     @AppStorage("speak_answers") private var speakAnswers = true
+    @StateObject private var recorder = Recorder()
+    @State private var micError = ""
+    @State private var holding = false  // finger on the talk button (recording starts a moment later)
 
     @State private var question = ""
     @State private var turns: [Turn] = []
@@ -103,6 +106,7 @@ struct ContentView: View {
                     Text("Versión \(version)").font(.footnote).foregroundStyle(.secondary)
                 }
             }
+            .safeAreaInset(edge: .bottom) { talkBar }
             .navigationTitle("CJ")
             .task { if PairingStore.load() != nil { await check() } }
             .sheet(isPresented: $scanning) {
@@ -117,6 +121,64 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// Hold to talk: records from the glasses while pressed, sends the question when released.
+    private var talkBar: some View {
+        VStack(spacing: 6) {
+            if recorder.recording {
+                Label(recorder.input, systemImage: recorder.fromGlasses ? "eyeglasses" : "iphone")
+                    .font(.footnote)
+                    .foregroundStyle(recorder.fromGlasses ? .green : .orange)
+            } else if !micError.isEmpty {
+                Text(micError).font(.footnote).foregroundStyle(.orange)
+            }
+            Text(recorder.recording ? String(format: "Escuchando… %.0f s  (suelta para enviar)", recorder.seconds)
+                 : asking ? "CJ está pensando…" : "Mantén pulsado para hablar")
+                .font(.headline)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 56)
+                .background(recorder.recording ? Color.red : (statusOK && !asking ? Color.accentColor : Color.gray),
+                            in: RoundedRectangle(cornerRadius: 14))
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        // Fires on every finger movement: start only once per press.
+                        guard !holding, statusOK, !asking else { return }
+                        holding = true
+                        speaker.stop()
+                        micError = ""
+                        Task {
+                            do { try await recorder.start() } catch { micError = error.localizedDescription }
+                            if !holding { _ = recorder.stop() }  // released before the mic was ready
+                        }
+                    }
+                    .onEnded { _ in
+                        holding = false
+                        guard let wav = recorder.stop() else { return }
+                        Task { await sendSpoken(wav) }
+                    })
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    private func sendSpoken(_ wav: Data) async {
+        asking = true
+        defer { asking = false }
+        let history = turns
+        do {
+            let answer = try await BrainClient(pairing: pairing).askSpoken(wav, history: history)
+            turns.append(Turn(role: "user", text: answer.heard.isEmpty ? "🎙️ (no se entendió)" : "🎙️ " + answer.heard))
+            let reply = answer.needsPhoto
+                ? "Para eso necesito ver lo que miras. Las fotos de las gafas llegarán en el paso 7."
+                : answer.spoken
+            guard !reply.isEmpty else { return }
+            turns.append(Turn(role: "assistant", text: reply))
+            if speakAnswers { speaker.say(reply, language: answer.needsPhoto ? "es" : answer.language) }
+        } catch {
+            turns.append(Turn(role: "assistant", text: "⚠️ " + error.localizedDescription))
         }
     }
 

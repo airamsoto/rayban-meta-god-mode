@@ -33,6 +33,23 @@ struct Answer: Decodable {
     let ms: Int?
 }
 
+struct SpokenAnswer: Decodable {
+    let heard: String
+    let spoken: String
+    let language: String?
+    let needsPhoto: Bool
+
+    enum CodingKeys: String, CodingKey { case heard, spoken, language, needsPhoto = "needs_photo" }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        heard = try c.decodeIfPresent(String.self, forKey: .heard) ?? ""
+        spoken = try c.decodeIfPresent(String.self, forKey: .spoken) ?? ""
+        language = try c.decodeIfPresent(String.self, forKey: .language)
+        needsPhoto = try c.decodeIfPresent(Bool.self, forKey: .needsPhoto) ?? false
+    }
+}
+
 enum BrainError: LocalizedError {
     case badAddress
     case unreachable(String)
@@ -77,6 +94,16 @@ struct BrainClient {
     func ask(_ text: String, history: [Turn]) async throws -> Answer {
         struct AskIn: Encodable { let text: String; let history: [Turn]; let voice: Bool }
         let body = try JSONEncoder().encode(AskIn(text: text, history: Array(history.suffix(8)), voice: false))
+        return try await call("POST", "/api/ask", body: body)
+    }
+
+    /// POST /api/ask with a recorded question (WAV). The brain transcribes it, and says whether it must look through
+    /// the glasses first (needs_photo) instead of answering.
+    func askSpoken(_ wav: Data, history: [Turn]) async throws -> SpokenAnswer {
+        struct AskIn: Encodable {
+            let audio_b64: String; let audio_mime = "audio/wav"; let history: [Turn]; let voice = false
+        }
+        let body = try JSONEncoder().encode(AskIn(audio_b64: wav.base64EncodedString(), history: Array(history.suffix(8))))
         return try await call("POST", "/api/ask", body: body)
     }
 
