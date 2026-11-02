@@ -85,8 +85,42 @@ final class Glasses: ObservableObject {
         throw last
     }
 
+    /// What the SDK knows about each pair of glasses, for the setup screen (helps when a photo fails).
+    func describeDevices() -> String {
+        let all = Wearables.shared.devices.compactMap { Wearables.shared.deviceForIdentifier($0) }
+        guard !all.isEmpty else { return "Ninguna. ¿Están vinculadas y encendidas?" }
+        return all.map { d in
+            let link = d.linkState == .connected ? "conectadas" : d.linkState == .connecting ? "conectando" : "desconectadas"
+            let hinge = d.hingeState == .open ? "abiertas" : d.hingeState == .closed ? "plegadas" : "patillas ?"
+            let worn = d.donState == .donned ? "puestas" : d.donState == .doffed ? "quitadas" : "uso ?"
+            let battery = d.batteryLevel.map { "\($0) %" } ?? "batería ?"
+            return "\(d.nameOrId()): \(link), \(hinge), \(worn), \(battery), \(d.compatibility().displayString)"
+        }.joined(separator: "\n")
+    }
+
+    /// The glasses to use: connected and unfolded. Picked by hand, as on Android, because the SDK's automatic choice
+    /// waits for the "worn" signal from the glasses' sensor and fails with "no eligible device" when it hasn't
+    /// arrived. Waits a few seconds for the link, and says why when it can't.
+    private func connectedGlasses() async throws -> DeviceIdentifier {
+        let deadline = Date().addingTimeInterval(8)
+        while true {
+            let ids = Wearables.shared.devices
+            let devices = ids.compactMap { Wearables.shared.deviceForIdentifier($0) }
+            if let ready = devices.first(where: { $0.linkState == .connected && $0.hingeState != .closed }) {
+                return ready.identifier
+            }
+            if Date() >= deadline {
+                if devices.isEmpty { throw GlassesError.notLinked }
+                if devices.contains(where: { $0.hingeState == .closed }) { throw GlassesError.stream(.hingesClosed) }
+                throw GlassesError.unavailable
+            }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+    }
+
     private func takePhotoOnce() async throws -> Snapshot {
-        let session = try Wearables.shared.createSession(deviceSelector: AutoDeviceSelector(wearables: Wearables.shared))
+        let device = try await connectedGlasses()
+        let session = try Wearables.shared.createSession(deviceSelector: SpecificDeviceSelector(device: device))
         defer { session.stop() }
         try session.start()
         let started = await firstMatch(session.stateStream(), timeout: 20) { $0 == .started }

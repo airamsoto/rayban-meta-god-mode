@@ -7,6 +7,7 @@ struct GlassesSection: View {
     @State private var working = false
     @State private var message = ""
     @State private var photo: UIImage?
+    @State private var deviceInfo = ""
 
     var body: some View {
         Section {
@@ -16,6 +17,11 @@ struct GlassesSection: View {
             LabeledContent("Vinculación", value: registrationText)
             if glasses.registration == .registered {
                 LabeledContent("Gafas detectadas", value: "\(glasses.devices)")
+                Text(deviceInfo).font(.footnote).foregroundStyle(.secondary)
+                    .onAppear { deviceInfo = glasses.describeDevices() }
+                    .onChange(of: glasses.devices) { deviceInfo = glasses.describeDevices() }
+                Button("Actualizar estado de las gafas") { deviceInfo = glasses.describeDevices() }
+                    .font(.footnote)
                 LabeledContent("Cámara", value: glasses.cameraGranted == true ? "Permitida" : "Sin permiso")
             }
 
@@ -70,6 +76,7 @@ struct GlassesSection: View {
                 message = ""
                 defer { working = false }
                 do { try await run() } catch { message = error.localizedDescription }
+                deviceInfo = glasses.describeDevices()
             }
         } label: {
             HStack {
