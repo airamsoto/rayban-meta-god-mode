@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: macos-latest
     defaults:
       run:
         working-directory: cj-ios
