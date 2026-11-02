@@ -2,6 +2,8 @@ import SwiftUI
 
 /// Step 2 of the port: pair by hand (address + token), check the brain answers, and chat with CJ by text.
 struct ContentView: View {
+    @ObservedObject var glasses: Glasses
+
     @State private var url = PairingStore.load()?.url ?? ""
     @State private var token = PairingStore.load()?.token ?? ""
     @State private var status = ""
@@ -61,6 +63,8 @@ struct ContentView: View {
                 } footer: {
                     Text("Escanea el QR que imprime run.sh, o escribe la línea «Brain» y el token que va tras «token=» en la línea «Console». Si el Mac cambia de dirección, CJ lo vuelve a encontrar solo.")
                 }
+
+                GlassesSection(glasses: glasses)
 
                 Section {
                     Toggle("Leer las respuestas en voz alta", isOn: $speakAnswers)
@@ -291,5 +295,5 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(glasses: Glasses())
 }

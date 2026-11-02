@@ -7,10 +7,16 @@ options:
     iOS: "17.2"  # minimum for Meta's Wearables Device Access Toolkit
   createIntermediateGroups: true
 
+packages:
+  # Meta Wearables Device Access Toolkit (glasses camera). Docs ask for Xcode 26.4+, but 1.0.1 builds with 26.1.
+  MWDAT:
+    url: https://github.com/meta/meta-wearables-dat-ios
+    exactVersion: 1.0.1
+
 settings:
   base:
-    MARKETING_VERSION: "0.6.0"
-    CURRENT_PROJECT_VERSION: "6"
+    MARKETING_VERSION: "0.7.0"
+    CURRENT_PROJECT_VERSION: "7"
     SWIFT_VERSION: "5.0"
 
 targets:
@@ -25,3 +31,8 @@ targets:
         INFOPLIST_FILE: CJ/Info.plist
         TARGETED_DEVICE_FAMILY: "1"  # iPhone
         GENERATE_INFOPLIST_FILE: NO
+    dependencies:
+      - package: MWDAT
+        product: MWDATCore
+      - package: MWDAT
+        product: MWDATCamera
