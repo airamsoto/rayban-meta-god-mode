@@ -75,6 +75,22 @@
 	<string>Para conectar con tus gafas Ray-Ban Meta.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Para conectar con tus gafas Ray-Ban Meta.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Para decirte qué tienes hoy, unirte a reuniones de Teams y apuntar citas por voz.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Para decirte qué tienes hoy, unirte a reuniones de Teams y apuntar citas por voz.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Para tus recordatorios y la lista de la compra.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Para tus recordatorios y la lista de la compra.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Para llamar o escribir por WhatsApp y Teams a tus contactos por su nombre.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>whatsapp</string>
+		<string>msteams</string>
+		<string>shortcuts</string>
+	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Para oír tus preguntas a través del micrófono de las gafas o del iPhone.</string>
 	<key>NSCameraUsageDescription</key>

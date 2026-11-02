@@ -19,26 +19,42 @@ final class Glasses: ObservableObject {
     @Published private(set) var devices = 0
     @Published private(set) var cameraGranted: Bool?
     @Published private(set) var configureError: String?
+    @Published private(set) var connected = false  // the linked glasses are on and connected right now
+    @Published private(set) var battery: Int?
+
+    /// Connection and battery of the linked glasses, for the status chip.
+    func refreshState() {
+        guard configured else { return }
+        let device = Wearables.shared.devices.compactMap { Wearables.shared.deviceForIdentifier($0) }
+            .first { $0.linkState == .connected } ?? Wearables.shared.devices.first.flatMap { Wearables.shared.deviceForIdentifier($0) }
+        connected = device?.linkState == .connected
+        battery = device?.batteryLevel
+    }
 
     private var observing = false
+    /// The SDK crashes the app if touched before configure(): every entry point checks this first.
+    private(set) var configured = false
 
     /// Once, at app launch. In Developer Mode MetaAppID is "0", so the SDK skips app attestation.
     func configure() {
+        guard !configured else { return }
         do {
             try Wearables.configure()
         } catch {
             configureError = "No se pudo iniciar el SDK de Meta: \(error.localizedDescription)"
             return
         }
+        configured = true
         guard !observing else { return }
         observing = true
         Task { for await state in Wearables.shared.registrationStateStream() { registration = state } }
-        Task { for await ids in Wearables.shared.devicesStream() { devices = ids.count } }
+        Task { for await ids in Wearables.shared.devicesStream() { devices = ids.count; refreshState() } }
         Task { await refreshCameraPermission() }
     }
 
     /// The Meta AI app's answer (registration, permissions) arrives as a cjglasses:// URL.
     func handle(_ url: URL) async -> Bool {
+        guard configured else { return false }
         let handled = (try? await Wearables.shared.handleUrl(url)) ?? false
         if handled { await refreshCameraPermission() }
         return handled
@@ -46,20 +62,23 @@ final class Glasses: ObservableObject {
 
     /// Opens the Meta AI app to link CJ to the glasses.
     func register() async throws {
+        guard configured else { throw GlassesError.notLinked }
         try await Wearables.shared.startRegistration()
     }
 
     func unregister() async throws {
+        guard configured else { return }
         try await Wearables.shared.startUnregistration()
     }
 
     func refreshCameraPermission() async {
-        guard registration == .registered else { cameraGranted = nil; return }
+        guard configured, registration == .registered else { cameraGranted = nil; return }
         cameraGranted = (try? await Wearables.shared.checkPermissionStatus(.camera)) == .granted
     }
 
     /// Opens the Meta AI app to allow CJ to use the glasses' camera.
     func requestCamera() async throws {
+        guard configured else { throw GlassesError.notLinked }
         cameraGranted = try await Wearables.shared.requestPermission(.camera) == .granted
     }
 
@@ -68,7 +87,7 @@ final class Glasses: ObservableObject {
     /// One photo from the glasses. Bluetooth hiccups are common (the glasses are still waking up, the link drops for
     /// a second), so it tries again a couple of times before giving up.
     func takePhoto() async throws -> Snapshot {
-        guard registration == .registered else { throw GlassesError.notLinked }
+        guard configured, registration == .registered else { throw GlassesError.notLinked }
         var last: Error = GlassesError.unavailable
         for attempt in 1...3 {
             do {
@@ -87,6 +106,7 @@ final class Glasses: ObservableObject {
 
     /// What the SDK knows about each pair of glasses, for the setup screen (helps when a photo fails).
     func describeDevices() -> String {
+        guard configured else { return "El SDK de Meta no está iniciado." }
         let all = Wearables.shared.devices.compactMap { Wearables.shared.deviceForIdentifier($0) }
         guard !all.isEmpty else { return "Ninguna. ¿Están vinculadas y encendidas?" }
         return all.map { d in

@@ -36,3 +36,4 @@ cj-ios/CJ.xcodeproj/
 cj-ios/build/
 cj-ios/Payload/
 *.ipa
+cj-ios/build-sim/

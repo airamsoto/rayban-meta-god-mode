@@ -5,10 +5,13 @@ word) and stops the moment you talk over it. Everything CJ can do stays availabl
     phone  <--(24 kHz PCM, events JSON)---  this bridge  <---------------  Gemini
 
 Phone -> brain JSON: {"type": "start", "mode": "assistant"|"interpreter", "history": [...], "location": {...},
-"language": "Spanish"}, {"type": "photo", "image_b64": ...} (answering need_photo), {"type": "end"}.
+"language": "Spanish", "phone_tools": [...], "shortcuts": [...]}, {"type": "photo", "image_b64": ...} (answering
+need_photo), {"type": "phone_result", "id", "result"} (answering phone_tool), {"type": "text", "text"} (typed),
+{"type": "end"}.
 Brain -> phone JSON: heard / said (transcripts), interrupted (stop playback), turn_done, need_photo,
 route ("user" or "partner": who the next audio is for, interpreter mode), phone (call, timer, dictation, translate,
-visual_memory), end. Binary frames are audio both ways.
+visual_memory), phone_tool {id, action, args} (only for actions the phone offered in "phone_tools"), end.
+Binary frames are audio both ways.
 
 Interpreter mode is the live translator: what the other person says is spoken in your ear in your language, and
 what you say is spoken in theirs, out loud from the phone.
@@ -110,6 +113,42 @@ FUNCTIONS = [
 ]
 
 
+# ---- tools the phone runs itself (the iPhone app offers these; the Android app doesn't, so it never sees them) ----
+PHONE_WAIT = 25  # seconds the phone gets to answer a phone tool (a permission prompt can take a moment)
+PHONE_ACTIONS = {
+    "calendar_events": '{"days": 0 for today, 1 for tomorrow…, "span": how many days, default 1}: events on the '
+                       "phone's calendars (iCloud, Outlook/Exchange, Google), with Teams links marked",
+    "calendar_add": '{"title", "date": "YYYY-MM-DD", "time": "HH:MM" 24h or "" for all day, "duration_minutes", '
+                    '"location"}: add an event to the phone calendar',
+    "teams_join": "{}: open the Teams link of the current or next meeting",
+    "teams_message": '{"to": a name from contacts or an email, "text"}: open a Teams chat with the message typed; '
+                     "the user taps send",
+    "whatsapp": '{"to": a name from contacts or a phone number, "text"}: open the WhatsApp chat with the message '
+                "typed; the user taps send",
+    "call": '{"to": a name from contacts or a phone number}: phone call (iOS asks the user to confirm)',
+    "reminder_add": '{"text", "list": e.g. "Compra" for shopping, empty for the default list}: add a reminder or a '
+                    "shopping-list item",
+    "list_items": '{"list": e.g. "Compra"}: read the open items of a reminders list (the shopping list)',
+    "run_shortcut": '{"name": exact name of one of the user\'s Shortcuts}: run an Apple Shortcut, e.g. home scenes '
+                    "and lights (Apple Home), music, or anything the user built",
+}
+
+PHONE_PROMPT = """
+The user's iPhone can act for you through the phone tool: calendar, Teams, WhatsApp, calls, reminders and the
+shopping list, and Apple Shortcuts (which run their smart home). Prefer it over device_action for calendar, reminders
+and calls: their calendar lives on the phone. Messages are typed into the chat and the user taps send, so read the
+message back in one short sentence and say it's ready to send; don't claim it was sent. Smart home goes through
+run_shortcut with the user's shortcut names{shortcuts}. In the kitchen, guide recipes one step at a time and use
+timers freely."""
+
+
+def phone_function(actions: list[str]) -> dict:
+    lines = "\n".join(f"- {a} {PHONE_ACTIONS[a]}" for a in actions)
+    return _fn("phone", "Do something on the user's iPhone. Actions and their args:\n" + lines,
+               action={"type": "STRING", "enum": actions},
+               args_json=_s('the action\'s args as a JSON object, e.g. {"to": "Mamá", "text": "Llego tarde"}'))
+
+
 class Bridge:
     def __init__(self, phone: WebSocket) -> None:
         self.phone = phone
@@ -126,6 +165,8 @@ class Bridge:
         self.route = ""
         self.held: list[bytes] = []
         self.closed = asyncio.Event()
+        self.phone_tools: list[str] = []  # what the phone offers to do itself (iPhone app)
+        self.phone_waiting: dict[str, asyncio.Future] = {}
 
     # ---- setup ----------------------------------------------------------------------------------------------
     def _setup(self) -> dict:
@@ -136,7 +177,12 @@ class Bridge:
         else:
             history = "".join(f"\n{t.get('role')}: {t.get('text', '')[:300]}" for t in self.start.get("history", [])[-8:])
             system = persona() + LIVE + recall.prompt() + (f"\nConversation so far:{history}" if history else "")
-            tools_ = [{"functionDeclarations": FUNCTIONS}]
+            functions = list(FUNCTIONS)
+            if self.phone_tools:
+                shortcuts = [str(s)[:60] for s in self.start.get("shortcuts", []) if str(s).strip()][:30]
+                system += PHONE_PROMPT.format(shortcuts=f" ({', '.join(shortcuts)})" if shortcuts else "")
+                functions.append(phone_function(self.phone_tools))
+            tools_ = [{"functionDeclarations": functions}]
         setup = {"model": f"models/{MODEL}",
                  "generationConfig": {"responseModalities": ["AUDIO"],
                                       "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": VOICE}}}},
@@ -187,6 +233,14 @@ class Bridge:
                     ctl = json.loads(msg["text"])
                     if ctl.get("type") == "photo" and self.photo and not self.photo.done():
                         self.photo.set_result(ctl.get("image_b64") or "")
+                    elif ctl.get("type") == "text" and str(ctl.get("text", "")).strip():
+                        # Typed in the app (or a quick-action button): a user turn, with every tool available.
+                        await self._to_gemini({"clientContent": {"turns": [{"role": "user", "parts": [
+                            {"text": str(ctl["text"]).strip()[:2000]}]}], "turnComplete": True}})
+                    elif ctl.get("type") == "phone_result":
+                        waiting = self.phone_waiting.pop(str(ctl.get("id", "")), None)
+                        if waiting and not waiting.done():
+                            waiting.set_result(str(ctl.get("result", ""))[:2000])
                     elif ctl.get("type") == "end":
                         break
         except WebSocketDisconnect:
@@ -339,6 +393,8 @@ class Bridge:
             return await self._look(str(a.get("question", "")))
         if name == "device_action":
             return await self._device(str(a.get("action", "")), a.get("args_json") or "{}")
+        if name == "phone":
+            return await self._phone_tool(str(a.get("action", "")), a.get("args_json") or "{}")
         if name == "confirm_action":
             said = await mac.handle({"confirm": bool(a.get("yes"))})
             await self._phone_action()
@@ -397,6 +453,27 @@ class Bridge:
             return f"FAILED: unknown action {action}."
         return said + (" (Ask the user exactly this and call confirm_action with their answer.)" if said.endswith("?") else "")
 
+    async def _phone_tool(self, action: str, args_json) -> str:
+        """Asks the phone to do something itself (calendar, WhatsApp, a call…) and waits for what it says happened."""
+        if action not in self.phone_tools:
+            return f"FAILED: the phone can't do {action}."
+        try:
+            args = json.loads(args_json) if isinstance(args_json, str) else dict(args_json)
+        except (ValueError, TypeError):
+            args = {}
+        if not isinstance(args, dict):
+            args = {}
+        request = os.urandom(4).hex()
+        waiting = asyncio.get_running_loop().create_future()
+        self.phone_waiting[request] = waiting
+        await self._event("phone_tool", id=request, action=action, args=args)
+        try:
+            return await asyncio.wait_for(waiting, PHONE_WAIT) or "Done."
+        except asyncio.TimeoutError:
+            return "FAILED: the phone didn't answer in time."
+        finally:
+            self.phone_waiting.pop(request, None)
+
     async def _phone_action(self) -> None:
         phone = mac.PHONE.get()
         if phone:
@@ -407,6 +484,8 @@ class Bridge:
     async def run(self) -> None:
         self.start = json.loads(await self.phone.receive_text())
         self.mode = "interpreter" if self.start.get("mode") == "interpreter" else "assistant"
+        offered = self.start.get("phone_tools")
+        self.phone_tools = [a for a in PHONE_ACTIONS if isinstance(offered, list) and a in offered]
         loc = self.start.get("location")
         lookups.LOCATION.set(loc if isinstance(loc, dict) and "lat" in loc else None)
         try:

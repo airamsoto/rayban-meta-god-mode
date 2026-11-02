@@ -9,8 +9,10 @@ enum LiveEnd: Equatable {
 
 /// One real-time conversation with the brain (cj-mac/cj/live.py, port of the Android Live.kt): the mic streams up,
 /// CJ's voice streams back and stops the moment you talk over it. Protocol:
-///   phone → brain: {"type":"start",...} first, then binary 16 kHz PCM frames; {"type":"photo"}, {"type":"end"}
-///   brain → phone: ready, heard, said, interrupted, turn_done, need_photo, route, phone, error, end; binary 24 kHz PCM
+///   phone → brain: {"type":"start",...} first, then binary 16 kHz PCM frames; {"type":"photo"}, {"type":"text"},
+///                  {"type":"phone_result"}, {"type":"end"}
+///   brain → phone: ready, heard, said, interrupted, turn_done, need_photo, route, phone, phone_tool, error, end;
+///                  binary 24 kHz PCM
 @MainActor
 final class LiveSession: ObservableObject {
     @Published private(set) var active = false
@@ -19,6 +21,8 @@ final class LiveSession: ObservableObject {
     @Published private(set) var saidNow = ""    // what CJ is saying
     @Published private(set) var micName = ""
     @Published private(set) var micIsGlasses = false
+    @Published private(set) var connecting = false
+    @Published private(set) var cjSpeaking = false  // drives the orb animation
 
     /// Each finished exchange, for the conversation log: (what you said, what CJ said).
     var onTurn: ((String, String) -> Void)?
@@ -28,8 +32,11 @@ final class LiveSession: ObservableObject {
     var onPhoto: ((Snapshot) -> Void)?
     /// Timers, visual memory on/off: things the phone does while the conversation goes on.
     var onPhoneAction: ((PhoneAction) -> Void)?
+    /// Runs a phone tool the brain asked for (calendar, WhatsApp, Teams…) and returns what happened.
+    var onPhoneTool: ((String, [String: Any]) async -> String)?
     /// A number to call once the conversation ends (the call needs the audio).
     private(set) var pendingCall: String?
+    private var pendingText: String?  // typed before the brain said ready
 
     static let idleSeconds: TimeInterval = 90  // quiet this long: close the session
 
@@ -51,7 +58,10 @@ final class LiveSession: ObservableObject {
     }()
 
     /// Runs one conversation until it ends. [history] gives the model context from earlier turns.
-    func run(pairing: Pairing, history: [Turn]) async -> LiveEnd {
+    /// [firstText]: a typed question (or quick action) to send as soon as the session is ready.
+    /// [phoneTools], [shortcuts]: what this iPhone can do itself, offered to the model.
+    func run(pairing: Pairing, history: [Turn], firstText: String? = nil, phoneTools: [String] = [],
+             shortcuts: [String] = []) async -> LiveEnd {
         guard !active else { return .failed("ya hay una conversación en marcha") }
         guard let base = pairing.baseURL,
               let url = URL(string: base.absoluteString.replacingOccurrences(of: "http", with: "ws", options: .anchored) + "/ws/live")
@@ -61,6 +71,9 @@ final class LiveSession: ObservableObject {
         result = nil
         nextStep = nil
         pendingCall = nil
+        pendingText = firstText
+        connecting = true
+        cjSpeaking = false
         heard = ""; heardNow = ""; saidNow = ""; overTalk = ""
         silenced = false
         lastActivity = Date()
@@ -77,6 +90,7 @@ final class LiveSession: ObservableObject {
         let start: [String: Any] = [
             "type": "start", "mode": "assistant", "language": "", "user_language": "Spanish",
             "history": history.suffix(8).map { ["role": $0.role, "text": $0.text] },
+            "phone_tools": phoneTools, "shortcuts": shortcuts,
         ]
         send(json: start)
 
@@ -93,6 +107,14 @@ final class LiveSession: ObservableObject {
 
         tasks.append(Task { [weak self] in await self?.receiveLoop() })
         tasks.append(Task { [weak self] in await self?.idleLoop() })
+        tasks.append(Task { [weak self] in
+            // The orb follows CJ's voice as it actually plays, not just the transcript.
+            while let self, self.active, !Task.isCancelled {
+                let speaking = self.audio?.speaking ?? false
+                if speaking != self.cjSpeaking { self.cjSpeaking = speaking }
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            }
+        })
 
         let end = await withCheckedContinuation { continuation in
             if let result { continuation.resume(returning: result) } else { self.continuation = continuation }
@@ -104,6 +126,18 @@ final class LiveSession: ObservableObject {
     /// Ends the conversation from the app (the "Terminar" button).
     func cancel() {
         finish(.cancelled)
+    }
+
+    /// A typed question or quick action during the conversation.
+    func sendText(_ text: String) {
+        lastActivity = Date()
+        if connecting { pendingText = text; return }
+        send(json: ["type": "text", "text": text])
+    }
+
+    /// Calls [number] once CJ finishes its answer and the conversation closes.
+    func callAfterTurn(_ number: String) {
+        pendingCall = number
     }
 
     // MARK: - events from the brain
@@ -134,7 +168,12 @@ final class LiveSession: ObservableObject {
         let text = e["text"] as? String ?? ""
         switch e["type"] as? String ?? "" {
         case "ready":
-            status = "Escuchando… habla con normalidad, di «adiós» para terminar"
+            connecting = false
+            status = "Te escucho"
+            if let text = pendingText {
+                pendingText = nil
+                send(json: ["type": "text", "text": text])
+            }
         case "heard":
             heard += text
             heardNow = heard
@@ -148,10 +187,12 @@ final class LiveSession: ObservableObject {
             }
         case "said":
             saidNow += text
+            cjSpeaking = true
             lastActivity = now
         case "interrupted":
             audio?.flush()
             saidNow = ""
+            cjSpeaking = false
         case "need_photo":
             // "What is this?", "add this to my calendar": the model called its look tool. An empty photo tells the
             // brain at once that the glasses couldn't take one, instead of it waiting 35 s.
@@ -167,8 +208,20 @@ final class LiveSession: ObservableObject {
             }
         case "phone":
             phoneAction(e)
+        case "phone_tool":
+            let id = e["id"] as? String ?? ""
+            let action = e["action"] as? String ?? ""
+            let args = e["args"] as? [String: Any] ?? [:]
+            lastActivity = now
+            Task { [weak self] in
+                guard let self else { return }
+                let result = await self.onPhoneTool?(action, args) ?? "FAILED: the phone can't do that."
+                self.send(json: ["type": "phone_result", "id": id, "result": result])
+                self.lastActivity = Date()
+            }
         case "turn_done":
             silenced = false
+            cjSpeaking = false
             overTalk = ""
             lastActivity = now
             let you = ((e["heard"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? heard)
@@ -234,6 +287,8 @@ final class LiveSession: ObservableObject {
         audio?.stop()
         audio = nil
         active = false
+        connecting = false
+        cjSpeaking = false
         status = ""
         heardNow = ""
         saidNow = ""

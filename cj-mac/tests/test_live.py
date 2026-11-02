@@ -162,3 +162,60 @@ def test_interrupted_translation_is_dropped(bridge):
 
 def test_background_speech_rule_is_in_the_prompt():
     assert "stay silent for a TV" in live.LIVE
+
+
+# ---- tools the iPhone runs itself ----------------------------------------------------------------------------------
+
+def test_phone_tool_is_offered_only_to_a_phone_that_has_it(bridge):
+    bridge.start = {"history": []}
+    names = [f["name"] for f in bridge._setup()["setup"]["tools"][0]["functionDeclarations"]]
+    assert "phone" not in names  # the Android app never offers phone tools
+
+    bridge.phone_tools = ["calendar_events", "whatsapp"]
+    bridge.start = {"history": [], "shortcuts": ["Luces salón"]}
+    setup = bridge._setup()["setup"]
+    phone = next(f for f in setup["tools"][0]["functionDeclarations"] if f["name"] == "phone")
+    assert phone["parameters"]["properties"]["action"]["enum"] == ["calendar_events", "whatsapp"]
+    assert "Luces salón" in setup["systemInstruction"]["parts"][0]["text"]
+
+
+def test_phone_tool_waits_for_the_phone_and_gives_the_model_its_answer(bridge):
+    bridge.phone_tools = ["calendar_events"]
+
+    async def go():
+        task = asyncio.create_task(bridge._run("phone", {"action": "calendar_events", "args_json": '{"days": 0}'}))
+        await asyncio.sleep(0)
+        asked = bridge.phone.events[-1]
+        assert asked["type"] == "phone_tool" and asked["action"] == "calendar_events" and asked["args"] == {"days": 0}
+        bridge.phone_waiting[asked["id"]].set_result("10:00 Daily (Teams)")
+        return await task
+    assert run(go()) == "10:00 Daily (Teams)"
+    assert bridge.phone_waiting == {}
+
+
+def test_phone_tool_refuses_what_the_phone_did_not_offer(bridge):
+    bridge.phone_tools = ["calendar_events"]
+    assert run(bridge._run("phone", {"action": "whatsapp", "args_json": "{}"})).startswith("FAILED")
+    assert bridge.phone.events == []
+
+
+def test_phone_tool_gives_up_when_the_phone_is_silent(bridge, monkeypatch):
+    monkeypatch.setattr(live, "PHONE_WAIT", 0.01)
+    bridge.phone_tools = ["call"]
+    assert "didn't answer" in run(bridge._run("phone", {"action": "call", "args_json": '{"to": "Juan"}'}))
+    assert bridge.phone_waiting == {}
+
+
+def test_typed_text_becomes_a_user_turn(bridge):
+    class Phone(FakePhone):
+        def __init__(self):
+            super().__init__()
+            self.inbox = [{"text": json.dumps({"type": "text", "text": "¿Qué tengo hoy?"})},
+                          {"type": "websocket.disconnect"}]
+
+        async def receive(self):
+            return self.inbox.pop(0)
+    bridge.phone = Phone()
+    run(bridge.from_phone())
+    turn = bridge.gemini.sent[-1]["clientContent"]
+    assert turn["turns"][0]["parts"][0]["text"] == "¿Qué tengo hoy?" and turn["turnComplete"] is True
