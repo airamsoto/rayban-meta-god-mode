@@ -1,0 +1,27 @@
+# XcodeGen spec for the CJ iOS app. The .xcodeproj is generated from this file (in CI and locally) and
+# is not committed:  cd cj-ios && xcodegen generate
+name: CJ
+options:
+  bundleIdPrefix: com.airamsoto
+  deploymentTarget:
+    iOS: "17.2"  # minimum for Meta's Wearables Device Access Toolkit
+  createIntermediateGroups: true
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+
+targets:
+  CJ:
+    type: application
+    platform: iOS
+    sources:
+      - path: CJ
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.airamsoto.cj
+        INFOPLIST_FILE: CJ/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"  # iPhone
+        GENERATE_INFOPLIST_FILE: NO
