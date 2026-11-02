@@ -26,6 +26,10 @@ final class LiveSession: ObservableObject {
     var takePhoto: (() async -> Snapshot?)?
     /// The photo CJ looked at, for the conversation log.
     var onPhoto: ((Snapshot) -> Void)?
+    /// Timers, visual memory on/off: things the phone does while the conversation goes on.
+    var onPhoneAction: ((PhoneAction) -> Void)?
+    /// A number to call once the conversation ends (the call needs the audio).
+    private(set) var pendingCall: String?
 
     static let idleSeconds: TimeInterval = 90  // quiet this long: close the session
 
@@ -56,6 +60,7 @@ final class LiveSession: ObservableObject {
         active = true
         result = nil
         nextStep = nil
+        pendingCall = nil
         heard = ""; heardNow = ""; saidNow = ""; overTalk = ""
         silenced = false
         lastActivity = Date()
@@ -173,7 +178,7 @@ final class LiveSession: ObservableObject {
             if !you.isEmpty || !cj.isEmpty { onTurn?(you, cj) }
             heardNow = ""
             saidNow = ""
-            if Phrases.wantsStop(you) { finish(.stop) } else if Phrases.wantsBye(you) { finish(.bye) }
+            if Phrases.wantsStop(you) { finish(.stop) } else if Phrases.wantsBye(you) || pendingCall != nil { finish(.bye) }
         case "end":
             finish(nextStep ?? .bye)
         case "error":
@@ -184,13 +189,16 @@ final class LiveSession: ObservableObject {
     }
 
     private func phoneAction(_ e: [String: Any]) {
-        switch e["action"] as? String ?? "" {
-        case "dictation": nextStep = .notYet("El dictado de notas llegará más adelante en iOS.")
-        case "translate": nextStep = .notYet("La traducción en directo llegará más adelante en iOS.")
+        guard let action = PhoneAction(event: e) else { return }
+        switch action.action {
+        case "dictation": nextStep = .notYet("El dictado de notas aún no está en la versión de iPhone.")
+        case "translate": nextStep = .notYet("La traducción en directo aún no está en la versión de iPhone.")
         case "phone_task": nextStep = .notYet("En iPhone, CJ no puede manejar otras apps por ti.")
-        case "timer": status = "Temporizador pedido: en iOS llegará en el paso 9."
-        case "call_number": status = "Llamar desde CJ llegará en el paso 9."
-        default: break
+        case "call_number":
+            pendingCall = action.number.flatMap { $0.isEmpty ? nil : $0 }
+            status = "Llamaré cuando termine de hablar."
+        default:
+            onPhoneAction?(action)  // timer, visual_memory
         }
     }
 

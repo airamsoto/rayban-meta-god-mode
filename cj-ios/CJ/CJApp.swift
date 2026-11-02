@@ -1,9 +1,14 @@
 import SwiftUI
+import UserNotifications
 
 /// CJ for iPhone: a hands-free assistant for Ray-Ban Meta glasses, talking to the CJ brain on your Mac.
 @main
 struct CJApp: App {
     @StateObject private var glasses = Glasses()
+
+    init() {
+        UNUserNotificationCenter.current().delegate = NotificationPresenter.shared  // timer banners while CJ is open
+    }
 
     var body: some Scene {
         WindowGroup {

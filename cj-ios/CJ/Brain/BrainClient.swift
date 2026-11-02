@@ -28,11 +28,52 @@ struct Turn: Codable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey { case role, text }
 }
 
+/// "Remind me in 10 minutes": the phone runs the timer.
+struct TimerRequest: Decodable, Equatable {
+    let seconds: Int
+    let label: String?
+}
+
+/// Something only the phone can do, handed back by the brain with its answer:
+/// call_number {number}, visual_memory {on}, translate {language}, phone_task {goal}, dictation {session}, timer.
+struct PhoneAction: Decodable, Equatable {
+    let action: String
+    var number: String? = nil
+    var on: Bool? = nil
+    var language: String? = nil
+    var goal: String? = nil
+    var session: String? = nil
+    var seconds: Int? = nil
+    var label: String? = nil
+
+    /// From a live-session "phone" event (a JSON object).
+    init?(event: [String: Any]) {
+        guard let action = event["action"] as? String else { return nil }
+        self.action = action
+        number = event["number"] as? String
+        on = event["on"] as? Bool
+        language = event["language"] as? String
+        goal = event["goal"] as? String
+        session = event["session"] as? String
+        seconds = (event["seconds"] as? NSNumber)?.intValue
+        label = event["label"] as? String
+    }
+}
+
 struct Answer: Decodable {
     let spoken: String
     let details: String?
     let language: String?
     let ms: Int?
+    let timer: TimerRequest?
+    let phone: PhoneAction?
+}
+
+/// A Claude Code job on the Mac that finished since the phone last asked.
+struct FinishedJob: Decodable {
+    let project: String
+    let state: String
+    let summary: String
 }
 
 struct SpokenAnswer: Decodable {
@@ -40,8 +81,10 @@ struct SpokenAnswer: Decodable {
     let spoken: String
     let language: String?
     let needsPhoto: Bool
+    let timer: TimerRequest?
+    let phone: PhoneAction?
 
-    enum CodingKeys: String, CodingKey { case heard, spoken, language, needsPhoto = "needs_photo" }
+    enum CodingKeys: String, CodingKey { case heard, spoken, language, timer, phone, needsPhoto = "needs_photo" }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -49,6 +92,8 @@ struct SpokenAnswer: Decodable {
         spoken = try c.decodeIfPresent(String.self, forKey: .spoken) ?? ""
         language = try c.decodeIfPresent(String.self, forKey: .language)
         needsPhoto = try c.decodeIfPresent(Bool.self, forKey: .needsPhoto) ?? false
+        timer = try? c.decodeIfPresent(TimerRequest.self, forKey: .timer)
+        phone = try? c.decodeIfPresent(PhoneAction.self, forKey: .phone)
     }
 }
 
@@ -112,6 +157,21 @@ struct BrainClient {
         }
         let body = try JSONEncoder().encode(AskIn(audio_b64: wav.base64EncodedString(), history: Array(history.suffix(8))))
         return try await call("POST", "/api/ask", body: body)
+    }
+
+    /// GET /api/jobs/done: Claude Code jobs that finished on the Mac (each is returned once).
+    func finishedJobs() async throws -> [FinishedJob] {
+        struct Jobs: Decodable { let jobs: [FinishedJob] }
+        let jobs: Jobs = try await call("GET", "/api/jobs/done")
+        return jobs.jobs
+    }
+
+    /// POST /api/glance: one visual-memory photo. True when the brain kept a note of it (the photo isn't stored).
+    func glance(jpegBase64: String) async throws -> Bool {
+        struct GlanceIn: Encodable { let image_b64: String; let mime = "image/jpeg" }
+        struct Kept: Decodable { let kept: Bool }
+        let kept: Kept = try await call("POST", "/api/glance", body: try JSONEncoder().encode(GlanceIn(image_b64: jpegBase64)))
+        return kept.kept
     }
 
     private func call<T: Decodable>(_ method: String, _ path: String, body: Data? = nil) async throws -> T {

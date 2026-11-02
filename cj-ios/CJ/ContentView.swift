@@ -1,8 +1,14 @@
 import SwiftUI
 
-/// Step 2 of the port: pair by hand (address + token), check the brain answers, and chat with CJ by text.
+/// CJ's single screen: brain pairing, glasses, voice, features, and the conversation with its talk buttons.
 struct ContentView: View {
     @ObservedObject var glasses: Glasses
+    @StateObject private var phone = PhoneActions()
+    @ObservedObject private var router = IntentRouter.shared
+    @AppStorage("visual_memory") private var visualMemory = false
+    @State private var lastGlance = Date.distantPast
+
+    static let glanceEvery: TimeInterval = 5 * 60  // visual memory: one photo every five minutes
 
     @State private var url = PairingStore.load()?.url ?? ""
     @State private var token = PairingStore.load()?.token ?? ""
@@ -83,6 +89,23 @@ struct ContentView: View {
                     Text("Con las gafas conectadas al iPhone por Bluetooth, CJ suena en ellas. La línea de arriba indica por dónde sale el sonido ahora.")
                 }
 
+                Section {
+                    Toggle("Memoria visual", isOn: $visualMemory)
+                    ForEach(phone.timers) { timer in
+                        Label {
+                            Text(timer.label.isEmpty ? "Temporizador" : timer.label)
+                            Text(timer.ends, style: .timer).foregroundStyle(.secondary)
+                        } icon: {
+                            Image(systemName: "timer")
+                        }
+                    }
+                } header: {
+                    Text("Funciones")
+                } footer: {
+                    Text("Memoria visual: mientras CJ está abierta, las gafas hacen una foto cada 5 minutos y el cerebro guarda solo una nota de texto. "
+                         + "Para empezar a hablar sin tocar la pantalla, di «Oye Siri, hablar con CJ» o asigna «Hablar con CJ» al botón de Acción en Ajustes.")
+                }
+
                 Section("Conversación") {
                     ForEach(turns) { turn in
                         VStack(alignment: .leading, spacing: 2) {
@@ -121,6 +144,17 @@ struct ContentView: View {
             .safeAreaInset(edge: .bottom) { talkBar }
             .navigationTitle("CJ")
             .task { if PairingStore.load() != nil { await check() } }
+            .task { await backgroundWork() }
+            .onAppear {
+                phone.announce = { text in
+                    turns.append(Turn(role: "assistant", text: "⏰ " + text))
+                    if speakAnswers && !live.active { speaker.say(text, language: "es") }
+                }
+                if router.talkRequested { Task { await talkFromIntent() } }
+            }
+            .onChange(of: router.talkRequested) { _, requested in
+                if requested { Task { await talkFromIntent() } }
+            }
             .sheet(isPresented: $scanning) {
                 QRScannerView { code in
                     if let scanned = Pairing(qr: code) {
@@ -195,11 +229,72 @@ struct ContentView: View {
         live.onPhoto = { snapshot in
             turns.append(Turn(role: "user", text: "📷 Lo que veían las gafas", image: snapshot.image))
         }
+        live.onPhoneAction = { action in apply(action) }
         let end = await live.run(pairing: pairing, history: turns.filter { $0.image == nil })
         switch end {
         case .failed(let why), .notYet(let why): micError = why
         case .idle: micError = "Conversación cerrada tras 90 s de silencio."
         default: break
+        }
+        if let number = live.pendingCall { phone.call(number) }
+    }
+
+    /// "Oye Siri, hablar con CJ" (or the Action Button): start talking as soon as the brain answers.
+    private func talkFromIntent() async {
+        router.talkRequested = false
+        guard !live.active else { return }
+        for _ in 0..<20 where !statusOK {  // just launched: the connection check may still be running
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        guard statusOK else { micError = "No llego al cerebro: revisa que run.sh esté en marcha."; return }
+        await talkLive()
+    }
+
+    /// Things the phone does for the brain: timers, calls, visual memory on/off.
+    private func apply(_ action: PhoneAction?, timer: TimerRequest? = nil) {
+        if let timer, timer.seconds > 0 { phone.startTimer(seconds: timer.seconds, label: timer.label) }
+        guard let action else { return }
+        switch action.action {
+        case "timer":
+            if let seconds = action.seconds, seconds > 0 { phone.startTimer(seconds: seconds, label: action.label) }
+        case "visual_memory":
+            visualMemory = action.on ?? true
+            lastGlance = .now  // the first photo comes in five minutes, not right now
+        case "call_number":
+            if let number = action.number, !number.isEmpty {
+                Task {  // let CJ finish saying "Calling…" first
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    phone.call(number)
+                }
+            }
+        case "translate": micError = "La traducción en directo aún no está en la versión de iPhone."
+        case "phone_task": micError = "En iPhone, CJ no puede manejar otras apps por ti."
+        default: break
+        }
+    }
+
+    /// While the app runs: announce finished Claude Code jobs (every 10 s) and take visual-memory photos (every 5 min).
+    private func backgroundWork() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard statusOK else { continue }
+            let brain = BrainClient(pairing: pairing)
+            if let jobs = try? await brain.finishedJobs() {
+                for job in jobs {
+                    let text = job.state == "done" ? "Claude Code terminó en \(job.project): \(job.summary)"
+                                                   : "Claude Code tuvo un problema en \(job.project): \(job.summary)"
+                    turns.append(Turn(role: "assistant", text: "💻 " + text))
+                    if speakAnswers && !live.active { speaker.say(text, language: "es") }
+                }
+            }
+            let idle = !live.active && !recorder.recording && !asking
+            if visualMemory, idle, glasses.registration == .registered,
+               Date().timeIntervalSince(lastGlance) >= Self.glanceEvery {
+                lastGlance = .now
+                if let shot = try? await glasses.takePhoto() {
+                    _ = try? await brain.glance(jpegBase64: shot.jpegBase64)
+                }
+            }
         }
     }
 
@@ -254,6 +349,9 @@ struct ContentView: View {
                 let seen = try await brain.ask(answer.heard, history: history, imageJpegBase64: snapshot.jpegBase64)
                 reply = seen.spoken
                 language = seen.language
+                apply(seen.phone, timer: seen.timer)
+            } else {
+                apply(answer.phone, timer: answer.timer)
             }
             guard !reply.isEmpty else { return }
             turns.append(Turn(role: "assistant", text: reply))
@@ -323,6 +421,7 @@ struct ContentView: View {
             let answer = try await BrainClient(pairing: pairing).ask(text, history: history)
             turns.append(Turn(role: "assistant", text: answer.spoken))
             if speakAnswers { speaker.say(answer.spoken, language: answer.language) }
+            apply(answer.phone, timer: answer.timer)
         } catch {
             turns.append(Turn(role: "assistant", text: "⚠️ " + (error.localizedDescription)))
         }
