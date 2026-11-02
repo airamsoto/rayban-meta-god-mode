@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Where the brain is and the token it expects (the same two values as the pairing QR code).
 struct Pairing: Equatable {
@@ -22,6 +23,7 @@ struct Turn: Codable, Equatable, Identifiable {
     var id = UUID()
     let role: String  // "user" | "assistant"
     let text: String
+    var image: UIImage? = nil  // a glasses photo CJ looked at (shown in the app, never sent as history)
 
     enum CodingKeys: String, CodingKey { case role, text }
 }
@@ -91,9 +93,14 @@ struct BrainClient {
     }
 
     /// POST /api/ask with a typed question and the last few turns for context.
-    func ask(_ text: String, history: [Turn]) async throws -> Answer {
-        struct AskIn: Encodable { let text: String; let history: [Turn]; let voice: Bool }
-        let body = try JSONEncoder().encode(AskIn(text: text, history: Array(history.suffix(8)), voice: false))
+    /// [imageJpegBase64]: a photo from the glasses, for "what is this" or "add this to my calendar".
+    func ask(_ text: String, history: [Turn], imageJpegBase64: String? = nil) async throws -> Answer {
+        struct AskIn: Encodable {
+            let text: String; let history: [Turn]; let voice: Bool
+            let image_b64: String?; let mime: String
+        }
+        let body = try JSONEncoder().encode(AskIn(text: text, history: Array(history.suffix(8)), voice: false,
+                                                  image_b64: imageJpegBase64, mime: "image/jpeg"))
         return try await call("POST", "/api/ask", body: body)
     }
 

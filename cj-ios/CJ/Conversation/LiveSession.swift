@@ -22,6 +22,10 @@ final class LiveSession: ObservableObject {
 
     /// Each finished exchange, for the conversation log: (what you said, what CJ said).
     var onTurn: ((String, String) -> Void)?
+    /// Takes a photo with the glasses when the model wants to look (nil when it can't).
+    var takePhoto: (() async -> Snapshot?)?
+    /// The photo CJ looked at, for the conversation log.
+    var onPhoto: ((Snapshot) -> Void)?
 
     static let idleSeconds: TimeInterval = 90  // quiet this long: close the session
 
@@ -144,9 +148,18 @@ final class LiveSession: ObservableObject {
             audio?.flush()
             saidNow = ""
         case "need_photo":
-            // The glasses camera arrives in step 7: answer at once so the brain doesn't wait 35 s for a photo.
-            send(json: ["type": "photo", "image_b64": ""])
-            status = "CJ quería ver lo que miras: las fotos de las gafas llegarán en el paso 7."
+            // "What is this?", "add this to my calendar": the model called its look tool. An empty photo tells the
+            // brain at once that the glasses couldn't take one, instead of it waiting 35 s.
+            status = "Mirando por las gafas…"
+            lastActivity = now  // a photo can take a while; that isn't silence
+            Task { [weak self] in
+                guard let self else { return }
+                let snapshot = await self.takePhoto?()
+                self.send(json: ["type": "photo", "image_b64": snapshot?.jpegBase64 ?? ""])
+                if let snapshot { self.onPhoto?(snapshot) }
+                self.status = snapshot == nil ? "No pude hacer la foto con las gafas." : "Escuchando…"
+                self.lastActivity = Date()
+            }
         case "phone":
             phoneAction(e)
         case "turn_done":

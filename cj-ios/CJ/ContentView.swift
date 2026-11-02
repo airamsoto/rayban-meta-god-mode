@@ -90,6 +90,13 @@ struct ContentView: View {
                                 .font(.caption.bold())
                                 .foregroundStyle(turn.role == "user" ? Color.secondary : Color.accentColor)
                             Text(turn.text)
+                            if let image = turn.image {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(maxHeight: 220)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
                         }
                     }
                     HStack {
@@ -184,7 +191,11 @@ struct ContentView: View {
             if !you.isEmpty { turns.append(Turn(role: "user", text: "🎙️ " + you)) }
             if !cj.isEmpty { turns.append(Turn(role: "assistant", text: cj)) }
         }
-        let end = await live.run(pairing: pairing, history: turns)
+        live.takePhoto = { await photoForCJ() }
+        live.onPhoto = { snapshot in
+            turns.append(Turn(role: "user", text: "📷 Lo que veían las gafas", image: snapshot.image))
+        }
+        let end = await live.run(pairing: pairing, history: turns.filter { $0.image == nil })
         switch end {
         case .failed(let why), .notYet(let why): micError = why
         case .idle: micError = "Conversación cerrada tras 90 s de silencio."
@@ -223,18 +234,42 @@ struct ContentView: View {
     private func sendSpoken(_ wav: Data) async {
         asking = true
         defer { asking = false }
-        let history = turns
+        let history = turns.filter { $0.image == nil }
+        let brain = BrainClient(pairing: pairing)
         do {
-            let answer = try await BrainClient(pairing: pairing).askSpoken(wav, history: history)
+            let answer = try await brain.askSpoken(wav, history: history)
             turns.append(Turn(role: "user", text: answer.heard.isEmpty ? "🎙️ (no se entendió)" : "🎙️ " + answer.heard))
-            let reply = answer.needsPhoto
-                ? "Para eso necesito ver lo que miras. Las fotos de las gafas llegarán en el paso 7."
-                : answer.spoken
+            var reply = answer.spoken
+            var language = answer.language
+            if answer.needsPhoto {
+                // "What is this?": look through the glasses, then ask again with the photo.
+                if speakAnswers { speaker.say("Déjame ver.", language: "es") }
+                guard let snapshot = await photoForCJ() else {
+                    reply = "No pude hacer la foto con las gafas. Revisa la sección Gafas."
+                    turns.append(Turn(role: "assistant", text: reply))
+                    if speakAnswers { speaker.say(reply, language: "es") }
+                    return
+                }
+                turns.append(Turn(role: "user", text: "📷 Lo que veían las gafas", image: snapshot.image))
+                let seen = try await brain.ask(answer.heard, history: history, imageJpegBase64: snapshot.jpegBase64)
+                reply = seen.spoken
+                language = seen.language
+            }
             guard !reply.isEmpty else { return }
             turns.append(Turn(role: "assistant", text: reply))
-            if speakAnswers { speaker.say(reply, language: answer.needsPhoto ? "es" : answer.language) }
+            if speakAnswers { speaker.say(reply, language: language) }
         } catch {
             turns.append(Turn(role: "assistant", text: "⚠️ " + error.localizedDescription))
+        }
+    }
+
+    /// A photo from the glasses for the brain, or nil (not linked, no camera permission, glasses unreachable).
+    private func photoForCJ() async -> Snapshot? {
+        do {
+            return try await glasses.takePhoto()
+        } catch {
+            micError = error.localizedDescription
+            return nil
         }
     }
 
