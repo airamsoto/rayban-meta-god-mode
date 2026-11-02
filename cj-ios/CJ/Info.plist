@@ -20,6 +20,14 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>CJ habla con el cerebro que corre en tu Mac, dentro de tu red Wi-Fi.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- The brain serves plain HTTP on the home network (cj-mac/run.sh). Only local addresses are exempt. -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchScreen</key>
