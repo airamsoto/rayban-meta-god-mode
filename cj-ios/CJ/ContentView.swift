@@ -14,6 +14,7 @@ struct ContentView: View {
     @StateObject private var recorder = Recorder()
     @State private var micError = ""
     @State private var holding = false  // finger on the talk button (recording starts a moment later)
+    @StateObject private var live = LiveSession()
 
     @State private var question = ""
     @State private var turns: [Turn] = []
@@ -124,23 +125,78 @@ struct ContentView: View {
         }
     }
 
-    /// Hold to talk: records from the glasses while pressed, sends the question when released.
+    /// Bottom bar: "Hablar con CJ" opens a real-time conversation; the mic button beside it is hold-to-talk.
     private var talkBar: some View {
         VStack(spacing: 6) {
-            if recorder.recording {
+            if live.active {
+                liveCard
+            } else if recorder.recording {
                 Label(recorder.input, systemImage: recorder.fromGlasses ? "eyeglasses" : "iphone")
                     .font(.footnote)
                     .foregroundStyle(recorder.fromGlasses ? .green : .orange)
             } else if !micError.isEmpty {
                 Text(micError).font(.footnote).foregroundStyle(.orange)
             }
-            Text(recorder.recording ? String(format: "Escuchando… %.0f s  (suelta para enviar)", recorder.seconds)
-                 : asking ? "CJ está pensando…" : "Mantén pulsado para hablar")
-                .font(.headline)
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, minHeight: 56)
-                .background(recorder.recording ? Color.red : (statusOK && !asking ? Color.accentColor : Color.gray),
-                            in: RoundedRectangle(cornerRadius: 14))
+            HStack(spacing: 10) {
+                Button {
+                    if live.active { live.cancel() } else { Task { await talkLive() } }
+                } label: {
+                    Label(live.active ? "Terminar" : "Hablar con CJ",
+                          systemImage: live.active ? "stop.fill" : "waveform")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, minHeight: 56)
+                        .background(live.active ? Color.red : (canTalk ? Color.accentColor : Color.gray),
+                                    in: RoundedRectangle(cornerRadius: 14))
+                }
+                .disabled(!live.active && !canTalk)
+                if !live.active { holdToTalkButton }
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    private var canTalk: Bool { statusOK && !asking && !recorder.recording }
+
+    /// What's happening in the live conversation right now.
+    private var liveCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(live.micName, systemImage: live.micIsGlasses ? "eyeglasses" : "iphone")
+                .font(.caption)
+                .foregroundStyle(live.micIsGlasses ? .green : .orange)
+            Text(live.status).font(.footnote).foregroundStyle(.secondary)
+            if !live.heardNow.isEmpty { Text("Tú: " + live.heardNow).font(.callout) }
+            if !live.saidNow.isEmpty { Text("CJ: " + live.saidNow).font(.callout).foregroundStyle(Color.accentColor) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func talkLive() async {
+        speaker.stop()
+        micError = ""
+        live.onTurn = { you, cj in
+            if !you.isEmpty { turns.append(Turn(role: "user", text: "🎙️ " + you)) }
+            if !cj.isEmpty { turns.append(Turn(role: "assistant", text: cj)) }
+        }
+        let end = await live.run(pairing: pairing, history: turns)
+        switch end {
+        case .failed(let why), .notYet(let why): micError = why
+        case .idle: micError = "Conversación cerrada tras 90 s de silencio."
+        default: break
+        }
+    }
+
+    /// Hold to talk: records from the glasses while pressed, sends the question when released.
+    private var holdToTalkButton: some View {
+        Image(systemName: recorder.recording ? "mic.fill" : asking ? "ellipsis" : "mic")
+            .font(.title2)
+            .foregroundStyle(.white)
+            .frame(width: 56, height: 56)
+            .background(recorder.recording ? Color.red : (statusOK && !asking ? Color.accentColor.opacity(0.7) : Color.gray),
+                        in: RoundedRectangle(cornerRadius: 14))
+            .accessibilityLabel("Mantén pulsado para una pregunta corta")
                 .gesture(DragGesture(minimumDistance: 0)
                     .onChanged { _ in
                         // Fires on every finger movement: start only once per press.
@@ -158,10 +214,6 @@ struct ContentView: View {
                         guard let wav = recorder.stop() else { return }
                         Task { await sendSpoken(wav) }
                     })
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.bar)
     }
 
     private func sendSpoken(_ wav: Data) async {
